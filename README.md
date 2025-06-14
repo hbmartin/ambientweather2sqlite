@@ -3,7 +3,7 @@
 [![Lint](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml/badge.svg)](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Code style: black](https://img.shields.io/badge/🐧️-black-000000.svg)](https://github.com/psf/black)
-[![Checked with pyrefly](https://img.shields.io/badge/🪲-pyrefly-437f30.svg)](https://pyrefly.org/)
+[![Checked with pyrefly](https://img.shields.io/badge/🪲-pyrefly-fe8801.svg)](https://pyrefly.org/)
 
 A project to record minute-by-minute weather observations from an AmbientWeather station over the local network - no API needed!
 
