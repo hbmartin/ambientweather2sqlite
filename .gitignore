@@ -1,5 +1,6 @@
 aw2sqlite.toml
 *.db
+*_metadata.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
