@@ -13,7 +13,7 @@ def create_metadata_if_not_exists(
     database_path: str,
     live_data_url: str,
 ) -> dict[str, str]:
-    path = Path(Path(database_path).stem + "_metadata.json")
+    path = Path(database_path).parent / (Path(database_path).stem + "_metadata.json")
     if not path.exists():
         try:
             labels = fetch_labels(live_data_url)
