@@ -20,7 +20,9 @@ jobs:
     - run: ruff check ambientweather2sqlite
     - name: Run type checks
       run: |
-        ty check ambientweather2sqlite 
+        cd ambientweather2sqlite
+        pwd
+        ty check ambientweather2sqlite
         pyrefly check ambientweather2sqlite
     - uses: psf/black@stable
       with:
