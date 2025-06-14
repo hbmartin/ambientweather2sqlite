@@ -1,8 +1,8 @@
-from http.client import HTTPException
 import json
 import sys
 import time
 from datetime import datetime
+from http.client import HTTPException
 from pathlib import Path
 
 from .database import insert_observation
@@ -13,7 +13,7 @@ def create_metadata_if_not_exists(
     database_path: str,
     live_data_url: str,
 ) -> dict[str, str]:
-    path = Path(Path(database_path).stem + '_metadata.json')
+    path = Path(Path(database_path).stem + "_metadata.json")
     if not path.exists():
         try:
             labels = fetch_labels(live_data_url)
@@ -29,10 +29,12 @@ def clear_lines(n: int) -> None:
     for _ in range(n):
         print("\033[A\033[K", end="")
 
+
 def wait_for_next_update(period_seconds: int) -> None:
     for i in range(period_seconds, 0, -1):
         print(f"Next update in {i} seconds", end="\r")
         time.sleep(1)
+
 
 def start_daemon(
     live_data_url: str,
