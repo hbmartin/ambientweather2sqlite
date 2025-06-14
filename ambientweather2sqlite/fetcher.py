@@ -1,5 +1,5 @@
-import mureq
-from awparser import extract_labels, extract_values
+from . import mureq
+from .awparser import extract_labels, extract_values
 
 
 def fetch_live_data(live_data_url: str) -> dict[str, float | None]:

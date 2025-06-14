@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from exceptions import UnexpectedEmptyDictionaryError
+from .exceptions import UnexpectedEmptyDictionaryError
 
 _DEFAULT_TABLE_NAME = "observations"
 

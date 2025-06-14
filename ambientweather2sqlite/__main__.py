@@ -1,9 +1,9 @@
 import sys
 import tomllib
 
-from configuration import create_config_file, get_config_path
-from daemon import start_daemon
-from database import create_database_if_not_exists
+from .configuration import create_config_file, get_config_path
+from .daemon import start_daemon
+from .database import create_database_if_not_exists
 
 
 def main() -> None:
