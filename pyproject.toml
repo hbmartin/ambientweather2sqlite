@@ -1,0 +1,64 @@
+[project]
+name = "ambientweather2sqlite"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+authors = [
+    { name = "Harold Martin", email = "Harold.Martin@gmail.com" },
+]
+keywords = ["ambientweather", "ambient", "sqlite", "tweather"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Framework :: Datasette",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+
+[project.scripts]
+overcast-to-sqlite = "ambientweather2sqlite.__main__:main"
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "pyrefly>=0.19.2",
+    "ruff>=0.11.13",
+    "ty>=0.0.1a10",
+]
+
+[tool.ruff]
+# Exclude a variety of commonly ignored directories.
+exclude = [".bzr", ".direnv", ".eggs", ".git", ".git-rewrite", ".hg", ".ipynb_checkpoints", ".mypy_cache", ".nox", ".pants.d", ".pyenv", ".pytest_cache", ".pytype", ".ruff_cache", ".svn", ".tox", ".venv", ".vscode", "__pypackages__", "_build", "buck-out", "build", "dist", "node_modules", "setup.py", "site-packages", "venv"]
+
+# Same as Black.
+line-length = 88
+indent-width = 4
+target-version = "py311"
+
+lint.select = ["ALL"]
+lint.ignore = ["ANN204", "D100", "D101", "D103", "D104", "D107", "D203", "D205", "D213", "D401", "T201"]
+
+[tool.ruff.lint.per-file-ignores]
+"ambientweather2sqlite/configuration.py" = ["E501"]
+"ambientweather2sqlite/parser.py" = ["ANN001", "ANN201", "D102", "D103"]
+"ambientweather2sqlite/mureq.py" = ["ALL"]
+
+[tool.ruff.format]
+# Same as Black.
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ty.environment]
+extra-paths = ["ambientweather2sqlite"]
+[tool.ty.src]
+exclude = ["**/mureq.py"]

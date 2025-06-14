@@ -1,4 +1,4 @@
-*.toml
+aw2sqlite.toml
 *.db
 
 # Byte-compiled / optimized / DLL files
