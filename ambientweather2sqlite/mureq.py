@@ -164,6 +164,7 @@ def yield_response(
         visited_urls.append(url)
         try:
             try:
+                # pyrefly: ignore  # bad-argument-type
                 conn.request(method, path, headers=headers, body=body)
                 response = conn.getresponse()
             except HTTPException:
@@ -454,6 +455,7 @@ def _prepare_request(
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
         conn = HTTPSConnection(
+            # pyrefly: ignore  # bad-argument-type
             host,
             port,
             source_address=source_address,
@@ -462,6 +464,7 @@ def _prepare_request(
         )
     else:
         conn = HTTPConnection(
+            # pyrefly: ignore  # bad-argument-type
             host,
             port,
             source_address=source_address,
