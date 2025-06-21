@@ -3,26 +3,13 @@ import sys
 import time
 from datetime import datetime
 from http.client import HTTPException
-from pathlib import Path
+
+from ambientweather2sqlite import mureq
+from ambientweather2sqlite.awparser import extract_values
+from ambientweather2sqlite.server import Server
 
 from .database import insert_observation
-from .fetcher import fetch_labels, fetch_live_data
-
-
-def create_metadata_if_not_exists(
-    database_path: str,
-    live_data_url: str,
-) -> dict[str, str]:
-    path = Path(database_path).parent / (Path(database_path).stem + "_metadata.json")
-    if not path.exists():
-        try:
-            labels = fetch_labels(live_data_url)
-        except HTTPException as e:
-            print(f"Error fetching metadata labels: {e}")
-            return {}
-        path.write_text(json.dumps(labels, indent=4))
-        return labels
-    return json.loads(path.read_text())
+from .metadata import create_metadata
 
 
 def clear_lines(n: int) -> None:
@@ -32,27 +19,43 @@ def clear_lines(n: int) -> None:
 
 def wait_for_next_update(period_seconds: int) -> None:
     for i in range(period_seconds, 0, -1):
-        print(f"Next update in {i} seconds", end="\r")
+        print(f"\033[KNext update in {i} seconds", end="\r")
         time.sleep(1)
 
 
 def start_daemon(
     live_data_url: str,
     database_path: str,
-    period_seconds: int = 60,
+    *,
+    port: int,
+    period_seconds: int = 10,
 ) -> None:
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")
-    metadata = create_metadata_if_not_exists(database_path, live_data_url)
+    metadata = create_metadata(database_path, live_data_url)
+
+    server = None
+
+    if port is not None:
+        host = "localhost"
+        print(f"Starting JSON server on http://{host}:{port}")
+        server = Server(live_data_url, port, host)
+        server.start()
+
     remove_newlines = 0
     try:
         while True:
             clear_lines(remove_newlines)
             try:
-                live_data = fetch_live_data(live_data_url)
+                body = mureq.get(live_data_url)
+                live_data = extract_values(body)
+            except TimeoutError:
+                print("Warming up weather station's server...")
+                remove_newlines = 1
+                continue
             except HTTPException as e:
-                print(f"Error fetching live data: {type(e).__name__}")
-                remove_newlines = 2
+                print(f"Error fetching live data: {e}")
+                remove_newlines = 1
                 wait_for_next_update(period_seconds)
                 continue
             print(f"Updated at: {datetime.now()}")
@@ -67,4 +70,6 @@ def start_daemon(
             wait_for_next_update(period_seconds)
     except KeyboardInterrupt:
         print(f"\nStopping... results saved to {database_path}")
+        if server is not None:
+            server.shutdown()
         sys.exit(0)
