@@ -7,14 +7,22 @@ mureq is copyright 2021 by its contributors and is released under the
 
 import contextlib
 import io
-import os.path
 import socket
 import ssl
 import sys
 import urllib.parse
-from http.client import HTTPConnection, HTTPException, HTTPMessage, HTTPSConnection
+from collections.abc import Generator, MutableMapping
+from http import HTTPStatus
+from http.client import (
+    HTTPConnection,
+    HTTPException,
+    HTTPMessage,
+    HTTPResponse,
+    HTTPSConnection,
+)
+from typing import cast
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "HTTPException",
@@ -30,13 +38,23 @@ __all__ = [
     "yield_response",
 ]
 
-DEFAULT_TIMEOUT = 15.0
+DEFAULT_TIMEOUT: float = 3
 
 # e.g. "Python 3.8.10"
 DEFAULT_UA = "Python " + sys.version.split()[0]
 
+Headers = MutableMapping[str, str] | HTTPMessage
+# pyrefly: ignore  # not-a-type
+JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 
-def request(method, url, *, read_limit=None, **kwargs):
+
+def request(
+    method: str,
+    url: str,
+    *,
+    read_limit: int | None = None,
+    **kwargs,
+) -> "Response":
     """Request performs an HTTP request and reads the entire response body.
 
     :param str method: HTTP method to request (e.g. 'GET', 'POST')
@@ -47,7 +65,7 @@ def request(method, url, *, read_limit=None, **kwargs):
     :return: Response object
     :rtype: Response
     :raises: HTTPException
-    """
+    """  # noqa: E501
     with yield_response(method, url, **kwargs) as response:
         try:
             body = response.read(read_limit)
@@ -63,53 +81,76 @@ def request(method, url, *, read_limit=None, **kwargs):
         )
 
 
-def get(url, **kwargs):
-    """Get performs an HTTP GET request."""
-    return request("GET", url=url, **kwargs)
+def get(url: str, *, auto_retry: bool = False, **kwargs) -> str:
+    """Performs an HTTP GET request.
+
+    See yield_response for kwargs.
+    """
+    try:
+        return request("GET", url=url, **kwargs).body.decode("utf-8")
+    except TimeoutError:
+        if auto_retry:
+            return get(url, auto_retry=False, **kwargs)
+        raise
 
 
-def post(url, body=None, **kwargs):
-    """Post performs an HTTP POST request."""
+def post(url: str, body: bytes | None = None, **kwargs) -> "Response":
+    """Performs an HTTP POST request.
+
+    See yield_response for kwargs.
+    """
     return request("POST", url=url, body=body, **kwargs)
 
 
-def head(url, **kwargs):
-    """Head performs an HTTP HEAD request."""
+def head(url: str, **kwargs) -> "Response":
+    """Performs an HTTP HEAD request.
+
+    See yield_response for kwargs.
+    """
     return request("HEAD", url=url, **kwargs)
 
 
-def put(url, body=None, **kwargs):
-    """Put performs an HTTP PUT request."""
+def put(url: str, body: bytes | None = None, **kwargs) -> "Response":
+    """Performs an HTTP PUT request.
+
+    See yield_response for kwargs.
+    """
     return request("PUT", url=url, body=body, **kwargs)
 
 
-def patch(url, body=None, **kwargs):
-    """Patch performs an HTTP PATCH request."""
+def patch(url: str, body: bytes | None = None, **kwargs) -> "Response":
+    """Performs an HTTP PATCH request.
+
+    See yield_response for kwargs.
+    """
     return request("PATCH", url=url, body=body, **kwargs)
 
 
-def delete(url, **kwargs):
-    """Delete performs an HTTP DELETE request."""
+def delete(url: str, **kwargs) -> "Response":
+    """Performs an HTTP DELETE request.
+
+    See yield_response for kwargs.
+    """
     return request("DELETE", url=url, **kwargs)
 
 
 @contextlib.contextmanager
-def yield_response(
-    method,
-    url,
+def yield_response(  # noqa: PLR0913
+    method: str,
+    url: str,
     *,
-    unix_socket=None,
-    timeout=DEFAULT_TIMEOUT,
-    headers=None,
-    params=None,
-    body=None,
-    form=None,
-    json=None,
-    verify=True,
-    source_address=None,
-    max_redirects=None,
-    ssl_context=None,
-):
+    unix_socket: str | None = None,
+    timeout: float | None = DEFAULT_TIMEOUT,
+    headers: Headers | list[tuple[str, str]] | None = None,
+    params: dict[str, str | bytes] | list[tuple[str, str | bytes]] | None = None,
+    body: bytes | None = None,
+    form: dict[str, str | bytes] | list[tuple[str, str | bytes]] | None = None,
+    json: JsonValue | None = None,
+    verify: bool = True,
+    source_address: str | tuple[str, int] | None = None,
+    max_redirects: int | None = None,
+    ssl_context: ssl.SSLContext | None = None,
+) -> Generator[HTTPResponse, None, None]:
     """yield_response is a low-level API that exposes the actual
     http.client.HTTPResponse via a contextmanager.
 
@@ -131,7 +172,7 @@ def yield_response(
     :type body: bytes or None
     :param form: parameters to be form-encoded and sent as the payload body, as a mapping or list of key-value pairs
     :param json: object to be serialized as JSON and sent as the payload body
-    :param bool verify: whether to verify TLS certificates (default: True)
+    :param bool verify: whether to verify TLS certificates (default: True) - it is highly recommended to set this True
     :param source_address: source address to bind to for TCP
     :type source_address: str or tuple(str, int) or None
     :param max_redirects: maximum number of redirects to follow, or None (the default) for no redirection
@@ -141,18 +182,17 @@ def yield_response(
     :return: http.client.HTTPResponse, yielded as context manager
     :rtype: http.client.HTTPResponse
     :raises: HTTPException
-    """
+    """  # noqa: E501
     method = method.upper()
-    headers = _prepare_outgoing_headers(headers)
+    headers = cast("MutableMapping[str, str]", _prepare_outgoing_headers(headers))
     enc_params = _prepare_params(params)
-    body = _prepare_body(body, form, json, headers)
+    prepared_body = _prepare_body(body, form, json, headers)
 
-    visited_urls = []
+    visited_urls: list[str] = []
 
     while max_redirects is None or len(visited_urls) <= max_redirects:
         url, conn, path = _prepare_request(
-            method,
-            url,
+            url=url,
             enc_params=enc_params,
             timeout=timeout,
             unix_socket=unix_socket,
@@ -164,9 +204,10 @@ def yield_response(
         visited_urls.append(url)
         try:
             try:
-                # pyrefly: ignore  # bad-argument-type
-                conn.request(method, path, headers=headers, body=body)
+                conn.request(method, path, headers=headers, body=prepared_body)
                 response = conn.getresponse()
+            except TimeoutError:
+                raise
             except HTTPException:
                 raise
             except OSError as e:
@@ -179,8 +220,8 @@ def yield_response(
                 yield response
                 return
             else:
-                url = redirect_url
-                if response.status == 303:
+                url = str(redirect_url)
+                if response.status == HTTPStatus.SEE_OTHER:
                     # 303 See Other: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/303
                     method = "GET"
         finally:
@@ -190,17 +231,24 @@ def yield_response(
 
 
 class Response:
-    """Response contains a completely consumed HTTP response.
-
-    :ivar str url: the retrieved URL, indicating whether a redirection occurred
-    :ivar int status_code: the HTTP status code
-    :ivar http.client.HTTPMessage headers: the HTTP headers
-    :ivar bytes body: the payload body of the response
-    """
+    """Response contains a completely consumed HTTP response."""
 
     __slots__ = ("body", "headers", "status_code", "url")
 
-    def __init__(self, url, status_code, headers, body):
+    def __init__(
+        self,
+        url: str,
+        status_code: int,
+        headers: Headers,
+        body: bytes,
+    ) -> None:
+        """Initialize a Response object.
+
+        :ivar str url: the retrieved URL, indicating whether a redirection occurred
+        :ivar int status_code: the HTTP status code
+        :ivar http.client.HTTPMessage headers: the HTTP headers
+        :ivar bytes body: the payload body of the response
+        """
         self.url, self.status_code, self.headers, self.body = (
             url,
             status_code,
@@ -208,37 +256,41 @@ class Response:
             body,
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Response(status_code={self.status_code:d})"
 
     @property
-    def ok(self):
+    def ok(self) -> bool:
         """Ok returns whether the response had a successful status code
         (anything other than a 40x or 50x).
         """
-        return not (400 <= self.status_code < 600)
+        return not (
+            HTTPStatus.BAD_REQUEST
+            <= self.status_code
+            < HTTPStatus.NETWORK_AUTHENTICATION_REQUIRED
+        )
 
     @property
-    def content(self):
+    def content(self) -> bytes:
         """Content returns the response body (the `body` member). This is an
         alias for compatibility with requests.Response.
         """
         return self.body
 
-    def raise_for_status(self):
+    def raise_for_status(self) -> None:
         """raise_for_status checks the response's success code, raising an
         exception for error codes.
         """
         if not self.ok:
             raise HTTPErrorStatus(self.status_code)
 
-    def json(self):
+    def json(self) -> JsonValue:
         """Attempts to deserialize the response body as UTF-8 encoded JSON."""
-        import json as jsonlib
+        import json as jsonlib  # noqa: PLC0415
 
         return jsonlib.loads(self.body)
 
-    def _debugstr(self):
+    def _debugstr(self) -> str:
         buf = io.StringIO()
         print("HTTP", self.status_code, file=buf)
         for k, v in self.headers.items():
@@ -264,10 +316,10 @@ class HTTPErrorStatus(HTTPException):
     called explicitly.
     """
 
-    def __init__(self, status_code):
+    def __init__(self, status_code: int) -> None:
         self.status_code = status_code
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"HTTP response returned error code {self.status_code:d}"
 
 
@@ -282,11 +334,11 @@ class UnixHTTPConnection(HTTPConnection):
     Unix domain stream socket instead of a TCP address.
     """
 
-    def __init__(self, path, timeout=DEFAULT_TIMEOUT):
-        super(UnixHTTPConnection, self).__init__("localhost", timeout=timeout)
+    def __init__(self, path: str, timeout: float | None = DEFAULT_TIMEOUT) -> None:
+        super().__init__("localhost", timeout=timeout)
         self._unix_path = path
 
-    def connect(self):
+    def connect(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.settimeout(self.timeout)
@@ -297,7 +349,7 @@ class UnixHTTPConnection(HTTPConnection):
         self.sock = sock
 
 
-def _check_redirect(url, status, response_headers):
+def _check_redirect(url: str, status: int, response_headers: Headers) -> str | None:
     """Return the URL to redirect to, or None for no redirection."""
     if status not in (301, 302, 303, 307, 308):
         return None
@@ -312,68 +364,67 @@ def _check_redirect(url, status, response_headers):
     old_url = urllib.parse.urlparse(url)
     if location.startswith("/"):
         # absolute path on old hostname
-        return urllib.parse.urlunparse(
-            (
-                old_url.scheme,
-                old_url.netloc,
-                parsed_location.path,
-                parsed_location.params,
-                parsed_location.query,
-                parsed_location.fragment,
+        return str(
+            urllib.parse.urlunparse(
+                (
+                    old_url.scheme,
+                    old_url.netloc,
+                    parsed_location.path,
+                    parsed_location.params,
+                    parsed_location.query,
+                    parsed_location.fragment,
+                ),
             ),
         )
 
     # relative path on old hostname
-    old_dir, _old_file = os.path.split(old_url.path)
-    new_path = os.path.join(old_dir, location)
-    return urllib.parse.urlunparse(
-        (
-            old_url.scheme,
-            old_url.netloc,
-            new_path,
-            parsed_location.params,
-            parsed_location.query,
-            parsed_location.fragment,
-        ),
-    )
+    return urllib.parse.urljoin(url, location)
 
 
-def _prepare_outgoing_headers(headers):
+def _prepare_outgoing_headers(
+    headers: Headers | list[tuple[str, str]] | None,
+) -> HTTPMessage:
     if headers is None:
         headers = HTTPMessage()
     elif not isinstance(headers, HTTPMessage):
         new_headers = HTTPMessage()
-        if hasattr(headers, "items"):
-            iterator = headers.items()
+        if isinstance(headers, list):
+            for k, v in headers:
+                new_headers[k] = v
         else:
-            iterator = iter(headers)
-        for k, v in iterator:
-            new_headers[k] = v
+            for k, v in headers.items():
+                new_headers[k] = v
         headers = new_headers
     _setdefault_header(headers, "User-Agent", DEFAULT_UA)
     return headers
 
 
-# XXX join multi-headers together so that get(), __getitem__(),
+# XXX: Issue #15 join multi-headers together so that get(), __getitem__(),
 # etc. behave intuitively, then stuff them back in an HTTPMessage.
-def _prepare_incoming_headers(headers):
-    headers_dict = {}
+def _prepare_incoming_headers(headers: Headers) -> HTTPMessage:
+    headers_dict: dict[str, list[str]] = {}
     for k, v in headers.items():
         headers_dict.setdefault(k, []).append(v)
     result = HTTPMessage()
     # note that iterating over headers_dict preserves the original
     # insertion order in all versions since Python 3.6:
+    # XXX: Issue #15: this is incorrect for some headers, notably Set-Cookie
     for k, vlist in headers_dict.items():
         result[k] = ",".join(vlist)
     return result
 
 
-def _setdefault_header(headers, name, value):
+def _setdefault_header(headers: Headers, name: str, value: str) -> None:
     if name not in headers:
-        headers[name] = value
+        headers[name] = value  # type: ignore[index]
 
 
-def _prepare_body(body, form, json, headers):
+def _prepare_body(
+    body: bytes | None,
+    form: dict[str, str | bytes] | list[tuple[str, str | bytes]] | None,
+    json: JsonValue | None,
+    headers: Headers,
+) -> bytes | str | None:
     if body is not None:
         if not isinstance(body, bytes):
             raise TypeError("body must be bytes or None", type(body))
@@ -381,7 +432,7 @@ def _prepare_body(body, form, json, headers):
 
     if json is not None:
         _setdefault_header(headers, "Content-Type", _JSON_CONTENTTYPE)
-        import json as jsonlib
+        import json as jsonlib  # noqa: PLC0415
 
         return jsonlib.dumps(json).encode("utf-8")
 
@@ -392,46 +443,18 @@ def _prepare_body(body, form, json, headers):
     return None
 
 
-def _prepare_params(params):
+def _prepare_params(
+    params: dict[str, str | bytes] | list[tuple[str, str | bytes]] | None,
+) -> str:
     if params is None:
         return ""
     return urllib.parse.urlencode(params, doseq=True)
 
 
-def _prepare_request(
-    method,
-    url,
-    *,
-    enc_params="",
-    timeout=DEFAULT_TIMEOUT,
-    source_address=None,
-    unix_socket=None,
-    verify=True,
-    ssl_context=None,
-):
-    """Parses the URL, returns the path and the right HTTPConnection subclass."""
-    parsed_url = urllib.parse.urlparse(url)
-
-    is_unix = unix_socket is not None
-    scheme = parsed_url.scheme.lower()
-    if scheme.endswith("+unix"):
-        scheme = scheme[:-5]
-        is_unix = True
-        if scheme == "https":
-            raise ValueError("https+unix is not implemented")
-
-    if scheme not in ("http", "https"):
-        raise ValueError("unrecognized scheme", scheme)
-
-    is_https = scheme == "https"
-    host = parsed_url.hostname
-    port = 443 if is_https else 80
-    if parsed_url.port:
-        port = parsed_url.port
-
-    if is_unix and unix_socket is None:
-        unix_socket = urllib.parse.unquote(parsed_url.netloc)
-
+def _path_with_query_or_params(
+    enc_params: str,
+    parsed_url: urllib.parse.ParseResult,
+) -> str:
     path = parsed_url.path
     if parsed_url.query:
         if enc_params:
@@ -440,13 +463,48 @@ def _prepare_request(
             path = f"{path}?{parsed_url.query}"
     elif enc_params:
         path = f"{path}?{enc_params}"
-    else:
-        pass  # just parsed_url.path in this case
+    return path
+
+
+def _prepare_request(  # noqa: C901, PLR0913
+    url: str,
+    *,
+    enc_params: str = "",
+    timeout: float | None = DEFAULT_TIMEOUT,
+    source_address: str | tuple[str, int] | None = None,
+    unix_socket: str | None = None,
+    verify: bool = True,
+    ssl_context: ssl.SSLContext | None = None,
+) -> tuple[str, HTTPConnection | UnixHTTPConnection | HTTPSConnection, str]:
+    """Parses the URL, returns the path and the right HTTPConnection subclass."""
+    parsed_url = urllib.parse.urlparse(url)
+
+    scheme = parsed_url.scheme.lower()
+    if scheme.endswith("+unix"):
+        scheme = scheme[:-5]
+        if unix_socket is None:
+            unix_socket = urllib.parse.unquote(parsed_url.netloc)
+        if scheme == "https":
+            raise ValueError("https+unix is not implemented")
+
+    if scheme not in ("http", "https"):
+        raise ValueError("unrecognized scheme", scheme)
+
+    is_https = scheme == "https"
+    host = parsed_url.hostname
+    if host is None:
+        raise ValueError("host is missing from url")
+    port = 443 if is_https else 80
+    if parsed_url.port:
+        port = parsed_url.port
+
+    path = _path_with_query_or_params(enc_params, parsed_url)
 
     if isinstance(source_address, str):
         source_address = (source_address, 0)
 
-    if is_unix:
+    conn: HTTPConnection | UnixHTTPConnection | HTTPSConnection
+    if unix_socket is not None:
         conn = UnixHTTPConnection(unix_socket, timeout=timeout)
     elif is_https:
         if ssl_context is None:
@@ -455,7 +513,6 @@ def _prepare_request(
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
         conn = HTTPSConnection(
-            # pyrefly: ignore  # bad-argument-type
             host,
             port,
             source_address=source_address,
@@ -464,21 +521,22 @@ def _prepare_request(
         )
     else:
         conn = HTTPConnection(
-            # pyrefly: ignore  # bad-argument-type
             host,
             port,
             source_address=source_address,
             timeout=timeout,
         )
 
-    munged_url = urllib.parse.urlunparse(
-        (
-            parsed_url.scheme,
-            parsed_url.netloc,
-            path,
-            parsed_url.params,
-            "",
-            parsed_url.fragment,
+    munged_url = str(
+        urllib.parse.urlunparse(
+            (
+                parsed_url.scheme,
+                parsed_url.netloc,
+                path,
+                parsed_url.params,
+                "",
+                parsed_url.fragment,
+            ),
         ),
     )
     return munged_url, conn, path
