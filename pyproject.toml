@@ -1,6 +1,6 @@
 [project]
 name = "ambientweather2sqlite"
-version = "0.2.0"
+version = "0.3.0"
 description = "A project to record weather observations from an AmbientWeather station over the local network - no API needed!"
 readme = "README.md"
 requires-python = ">=3.11"
