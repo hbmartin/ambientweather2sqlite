@@ -38,7 +38,7 @@ def main() -> None:
     start_daemon(
         live_data_url=config["live_data_url"],
         database_path=config["database_path"],
-        port=port or config["port"],
+        port=port or config.get("port"),
     )
 
 

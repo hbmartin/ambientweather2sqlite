@@ -9,9 +9,9 @@ from ambientweather2sqlite.awparser import extract_labels
 def create_metadata(
     database_path: str,
     live_data_url: str,
-) -> dict[str, str]:
+) -> dict:
     _database_path = Path(database_path)
-    path = _database_path.parent / (_database_path.stem + "_metadata.json")
+    path = _database_path.parent / f"{_database_path.stem}_metadata.json"
     try:
         body = mureq.get(live_data_url, auto_retry=True)
         labels = extract_labels(body)

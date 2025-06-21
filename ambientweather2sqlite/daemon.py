@@ -27,7 +27,7 @@ def start_daemon(
     live_data_url: str,
     database_path: str,
     *,
-    port: int,
+    port: int | None = None,
     period_seconds: int = 10,
 ) -> None:
     print(f"Observing {live_data_url}")

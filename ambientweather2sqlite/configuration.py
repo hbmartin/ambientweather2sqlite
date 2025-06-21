@@ -35,6 +35,9 @@ def create_config_file(config_path: str | Path | None) -> Path:
     ).strip()
     if not database_path:
         database_path = f"{current_path}/aw2sqlite.db"
+    port = input(
+        "Enter port number to server JSON data (leave blank to disable):\n",
+    ).strip()
 
     output_file = (
         f"{current_path}/aw2sqlite.toml" if config_path is None else config_path
@@ -44,9 +47,11 @@ def create_config_file(config_path: str | Path | None) -> Path:
             f"Enter output TOML filename (leave blank for default: {output_file}):\n",
         ).strip()
 
+
+    config = f'live_data_url = "{ambient_url}"\ndatabase_path = "{database_path}"\n'
+    if port:
+        config += f"port = {port}\n"
     output_path = Path(output_file)
-    output_path.write_text(
-        f'live_data_url = "{ambient_url}"\ndatabase_path = "{database_path}"\n',
-    )
+    output_path.write_text(config)
 
     return output_path

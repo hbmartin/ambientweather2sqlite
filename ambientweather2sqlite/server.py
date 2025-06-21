@@ -28,7 +28,11 @@ def create_request_handler(live_data_url: str) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(json_string.encode("utf-8"))
 
         def do_GET(self):
-            body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
+            try:
+                body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
+            except Exception as e:  # noqa: BLE001
+                self._send_json({"error": str(e)}, 500)
+                return
             values = extract_values(body)
             labels = extract_labels(body)
 
