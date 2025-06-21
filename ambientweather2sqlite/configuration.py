@@ -47,7 +47,6 @@ def create_config_file(config_path: str | Path | None) -> Path:
             f"Enter output TOML filename (leave blank for default: {output_file}):\n",
         ).strip()
 
-
     config = f'live_data_url = "{ambient_url}"\ndatabase_path = "{database_path}"\n'
     if port:
         config += f"port = {port}\n"
