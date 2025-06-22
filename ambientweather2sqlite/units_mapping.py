@@ -46,15 +46,22 @@ AW_UNIT_TO_PINT_UNIT = {
     "°": "angular_degree",
 }
 
-def units_for_columns(labels: dict[str, str], units: dict[Units, str]) -> tuple[dict[str, str], dict[str, str]]:
+
+def units_for_columns(
+    labels: dict[str, str],
+    units: dict[Units, str],
+) -> tuple[dict[str, str], dict[str, str]]:
     column_to_unit = {}
     labels_with_units = {}
     for column, label in labels.items():
         labels_with_units[column] = label
         for substr, unit in LABEL_TO_UNIT.items():
             if substr.lower() in label.lower():
-                column_to_unit[column] = AW_UNIT_TO_PINT_UNIT.get(units[unit], units[unit])
+                column_to_unit[column] = AW_UNIT_TO_PINT_UNIT.get(
+                    units[unit],
+                    units[unit],
+                )
                 labels_with_units[column] = f"{label} ({units[unit]})"
                 break
-    
+
     return labels_with_units, column_to_unit

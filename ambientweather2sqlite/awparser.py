@@ -117,8 +117,7 @@ def extract_labels(html_content: str) -> dict[str, str]:
 
 
 class UnitsHTMLParser(HTMLParser):
-    """
-    A parser to extract selected weather station units from an HTML file.
+    """A parser to extract selected weather station units from an HTML file.
 
     This parser identifies sections for each unit type as defined in the Units
     enum, finds the corresponding <select> element, and extracts the text from
@@ -134,9 +133,7 @@ class UnitsHTMLParser(HTMLParser):
         self.extracted_units: dict[Units, str] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        """
-        Processes start tags to identify relevant sections and selected options.
-        """
+        """Processes start tags to identify relevant sections and selected options."""
         attributes = dict(attrs)
         # Check if we are entering a <div> that contains a unit label.
         if tag == "div" and attributes.get("class") == "item_1":
@@ -149,9 +146,7 @@ class UnitsHTMLParser(HTMLParser):
                 self._is_in_selected_option = True
 
     def handle_endtag(self, tag: str) -> None:
-        """
-        Processes end tags to reset state flags.
-        """
+        """Processes end tags to reset state flags."""
         if tag == "div":
             self._is_in_unit_label_div = False
         elif tag == "option":
@@ -161,9 +156,7 @@ class UnitsHTMLParser(HTMLParser):
             self._current_unit_label = None
 
     def handle_data(self, data: str) -> None:
-        """
-        Processes the text content within tags to extract labels and values.
-        """
+        """Processes the text content within tags to extract labels and values."""
         # If inside a unit label div, check if the text corresponds to a
         # unit type we are interested in.
         if self._is_in_unit_label_div and data.strip() in self._all_unit_values:
@@ -171,9 +164,8 @@ class UnitsHTMLParser(HTMLParser):
 
         # If we are inside a selected option for a tracked unit, extract its text.
         elif self._is_in_selected_option and self._current_unit_label:
-            unit_value = data.strip()
-            if unit_value:
-                # Map the found label (e.g., "Solar Radiation") to the corresponding Enum member
+            if unit_value := data.strip():
+                # Map the found label (e.g., "Solar Radiation") to the Enum member
                 unit_enum_member = next(
                     (
                         member
@@ -189,15 +181,14 @@ class UnitsHTMLParser(HTMLParser):
 
 
 def extract_units(html_content: str) -> dict[Units, str]:
-    """Parses the HTML content from livedata.htm to extract input names
-    and their corresponding labels using Python's html.parser.
+    """Parses the HTML content from station.htm to extract selected units.
 
     Args:
         html_content (str): The HTML content of the file.
 
     Returns:
-        dict: A dictionary mapping input names to the text of the
-              preceding <td> element.
+        dict: A dictionary mapping Units enum members to the text of the
+              selected option.
 
     """
     parser = UnitsHTMLParser()

@@ -1,10 +1,12 @@
 import json
 from http.client import HTTPException
 from pathlib import Path
+from urllib.parse import urljoin
 
 from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_labels, extract_units
 from ambientweather2sqlite.units_mapping import units_for_columns
+
 
 def create_metadata(
     database_path: str,
@@ -16,9 +18,9 @@ def create_metadata(
         labels = extract_labels(mureq.get(live_data_url, auto_retry=True))
         units = extract_units(
             mureq.get(
-                live_data_url.replace("livedata.htm", "station.htm"),
+                urljoin(live_data_url, "station.htm"),
                 auto_retry=True,
-            )
+            ),
         )
         labels_with_units, column_to_unit = units_for_columns(labels, units)
     except HTTPException as e:
