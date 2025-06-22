@@ -1,9 +1,13 @@
 import sys
 import tomllib
+from typing import TYPE_CHECKING
 
 from .configuration import create_config_file, get_config_path
 from .daemon import start_daemon
 from .database import create_database_if_not_exists
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def get_int_argument(args: list[str]) -> int | None:
@@ -26,7 +30,7 @@ def get_str_argument(args: list[str]) -> str | None:
 
 
 def main() -> None:
-    default_config_path = get_config_path()
+    default_config_path: str | Path | None = get_config_path()
     port: int | None = None
     if len(sys.argv) > 1:
         args = sys.argv[1:]

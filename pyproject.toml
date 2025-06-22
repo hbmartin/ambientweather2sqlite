@@ -48,7 +48,7 @@ lint.ignore = ["ANN204", "D100", "D101", "D103", "D104", "D107", "D203", "D205",
 
 [tool.ruff.lint.per-file-ignores]
 "ambientweather2sqlite/configuration.py" = ["E501"]
-"ambientweather2sqlite/awparser.py" = ["ANN001", "ANN201", "D102", "SIM102"]
+"ambientweather2sqlite/awparser.py" = ["ANN001", "ANN201", "D102", "ERA001", "SIM102"]
 "ambientweather2sqlite/server.py" = ["ANN201", "ANN202", "D102", "N802"]
 "ambientweather2sqlite/mureq.py" = ["ANN003", "D105", "D203", "D205", "D213", "D401", "EM101", "ERA001", "FIX003", "TD001", "TD002", "TRY003"]
 

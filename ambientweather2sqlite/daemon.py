@@ -28,7 +28,7 @@ def start_daemon(
     database_path: str,
     *,
     port: int | None = None,
-    period_seconds: int = 10,
+    period_seconds: int = 60,
 ) -> None:
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")

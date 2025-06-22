@@ -126,10 +126,11 @@ class UnitsHTMLParser(HTMLParser):
 
     def __init__(self, *, convert_charrefs: bool = True) -> None:
         super().__init__(convert_charrefs=convert_charrefs)
+        # pyrefly: ignore  # bad-argument-type
         self._all_unit_values = {member.value for member in Units}
         self._is_in_unit_label_div = False
         self._is_in_selected_option = False
-        self._current_unit_label = None
+        self._current_unit_label: str | None = None
         self.extracted_units: dict[Units, str] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -169,6 +170,7 @@ class UnitsHTMLParser(HTMLParser):
                 unit_enum_member = next(
                     (
                         member
+                        # pyrefly: ignore  # bad-argument-type
                         for member in Units
                         if member.value == self._current_unit_label
                     ),
