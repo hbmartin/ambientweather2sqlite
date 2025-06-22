@@ -1,5 +1,7 @@
 from html.parser import HTMLParser
 
+from ambientweather2sqlite.units_mapping import Units
+
 
 class DisabledInputParser(HTMLParser):
     def __init__(self):
@@ -112,3 +114,97 @@ def extract_labels(html_content: str) -> dict[str, str]:
     parser = LabeledInputParser()
     parser.feed(html_content)
     return parser.data_dict
+
+
+class UnitsHTMLParser(HTMLParser):
+    """
+    A parser to extract selected weather station units from an HTML file.
+
+    This parser identifies sections for each unit type as defined in the Units
+    enum, finds the corresponding <select> element, and extracts the text from
+    the <option> tag that has the 'selected' attribute.
+    """
+
+    def __init__(self, *, convert_charrefs: bool = True) -> None:
+        super().__init__(convert_charrefs=convert_charrefs)
+        self._all_unit_values = {member.value for member in Units}
+        self._is_in_unit_label_div = False
+        self._is_in_selected_option = False
+        self._current_unit_label = None
+        self.extracted_units: dict[Units, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """
+        Processes start tags to identify relevant sections and selected options.
+        """
+        attributes = dict(attrs)
+        # Check if we are entering a <div> that contains a unit label.
+        if tag == "div" and attributes.get("class") == "item_1":
+            self._is_in_unit_label_div = True
+
+        # Check if we have found an <option> tag that is selected.
+        # This must happen after a valid unit label has been identified.
+        elif tag == "option" and self._current_unit_label is not None:
+            if "selected" in attributes:
+                self._is_in_selected_option = True
+
+    def handle_endtag(self, tag: str) -> None:
+        """
+        Processes end tags to reset state flags.
+        """
+        if tag == "div":
+            self._is_in_unit_label_div = False
+        elif tag == "option":
+            self._is_in_selected_option = False
+        # When a <select> tag closes, we are done with the current unit.
+        elif tag == "select" and self._current_unit_label:
+            self._current_unit_label = None
+
+    def handle_data(self, data: str) -> None:
+        """
+        Processes the text content within tags to extract labels and values.
+        """
+        # If inside a unit label div, check if the text corresponds to a
+        # unit type we are interested in.
+        if self._is_in_unit_label_div and data.strip() in self._all_unit_values:
+            self._current_unit_label = data.strip()
+
+        # If we are inside a selected option for a tracked unit, extract its text.
+        elif self._is_in_selected_option and self._current_unit_label:
+            unit_value = data.strip()
+            if unit_value:
+                # Map the found label (e.g., "Solar Radiation") to the corresponding Enum member
+                unit_enum_member = next(
+                    (
+                        member
+                        for member in Units
+                        if member.value == self._current_unit_label
+                    ),
+                    None,
+                )
+                if unit_enum_member:
+                    self.extracted_units[unit_enum_member] = unit_value
+                # Reset the flag to ensure we only capture one value.
+                self._is_in_selected_option = False
+
+
+def extract_units(html_content: str) -> dict[Units, str]:
+    """Parses the HTML content from livedata.htm to extract input names
+    and their corresponding labels using Python's html.parser.
+
+    Args:
+        html_content (str): The HTML content of the file.
+
+    Returns:
+        dict: A dictionary mapping input names to the text of the
+              preceding <td> element.
+
+    """
+    parser = UnitsHTMLParser()
+    parser.feed(html_content)
+    found_units = parser.extracted_units
+    if Units.HUMIDITY not in found_units:
+        found_units[Units.HUMIDITY] = "%"
+    if Units.WIND_DIRECTION not in found_units:
+        found_units[Units.WIND_DIRECTION] = "°"
+    return found_units

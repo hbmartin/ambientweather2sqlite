@@ -3,21 +3,27 @@ from http.client import HTTPException
 from pathlib import Path
 
 from ambientweather2sqlite import mureq
-from ambientweather2sqlite.awparser import extract_labels
-
+from ambientweather2sqlite.awparser import extract_labels, extract_units
+from ambientweather2sqlite.units_mapping import units_for_columns
 
 def create_metadata(
     database_path: str,
     live_data_url: str,
-) -> dict:
+) -> tuple[dict[str, str], dict[str, str]]:
     _database_path = Path(database_path)
     path = _database_path.parent / f"{_database_path.stem}_metadata.json"
     try:
-        body = mureq.get(live_data_url, auto_retry=True)
-        labels = extract_labels(body)
+        labels = extract_labels(mureq.get(live_data_url, auto_retry=True))
+        units = extract_units(
+            mureq.get(
+                live_data_url.replace("livedata.htm", "station.htm"),
+                auto_retry=True,
+            )
+        )
+        labels_with_units, column_to_unit = units_for_columns(labels, units)
     except HTTPException as e:
         print(f"Error fetching metadata labels: {e}")
-        return {}
+        return {}, {}
     metadata = {
         "databases": {
             _database_path.stem: {
@@ -26,10 +32,11 @@ def create_metadata(
                 "tables": {
                     "observations": {
                         "columns": labels,
+                        "units": column_to_unit,
                     },
                 },
             },
         },
     }
     path.write_text(json.dumps(metadata, indent=4))
-    return labels
+    return labels_with_units, column_to_unit
