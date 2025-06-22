@@ -5,8 +5,18 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Code style: black](https://img.shields.io/badge/🐧️-black-000000.svg)](https://github.com/psf/black)
 [![Checked with pyrefly](https://img.shields.io/badge/🪲-pyrefly-fe8801.svg)](https://pyrefly.org/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hbmartin/graphviz2drawio)
 
 A project to record minute-by-minute weather observations from an AmbientWeather station over the local network - no API needed!
+
+## Key Features
+
+* Local Network Operation: Direct connection to weather stations without external API dependencies
+* Continuous Data Collection: Automated daemon process collecting data at 60-second intervals
+* Dynamic Schema Management: Automatic database schema evolution as new sensors are detected
+* HTTP JSON API: Optional web server providing live data access
+* Interactive Configuration: Command-line setup wizard for initial configuration
+* Cross-Platform Distribution: Available via PyPI with pipx installation
 
 ## Installation
 
