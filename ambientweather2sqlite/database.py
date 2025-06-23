@@ -292,7 +292,7 @@ def query_hourly_aggregated_data(
         cursor.execute(query)
 
         # Convert to nested dict format
-        result: list[dict[str, float | int] | None] = [None] * 24
+        result: list[dict[str, float | int] | None] = [None for _ in range(24)]
         for row in cursor:
             result[int(row["hour"])] = dict(row)
 
