@@ -39,7 +39,7 @@ def start_daemon(
     if port is not None:
         host = "localhost"
         print(f"Starting JSON server on http://{host}:{port}")
-        server = Server(live_data_url, port, host)
+        server = Server(live_data_url, database_path, port, host)
         server.start()
 
     remove_newlines = 0
