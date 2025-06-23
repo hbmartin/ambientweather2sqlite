@@ -6,6 +6,7 @@ from .exceptions import (
     InvalidColumnNameError,
     InvalidDateError,
     InvalidFormatError,
+    InvalidPriorDaysError,
     MissingAggregationFieldsError,
     UnexpectedEmptyDictionaryError,
 )
@@ -151,7 +152,7 @@ def _select_parts_from_aggregation_fields(
 
     for field in aggregation_fields:
         # Parse field like "avg_outHumi" into ("avg", "outHumi")
-        match = re.match(r"^(avg|max|min|sum)_(.+)$", field.lower())
+        match = re.match(r"^(avg|max|min|sum)_(.+)$", field, re.IGNORECASE)
         if not match:
             raise InvalidFormatError(field)
 
@@ -169,8 +170,10 @@ def _select_parts_from_aggregation_fields(
     # Build SELECT clause
     select_parts = [datetime_expression]
 
-    for agg_func, column_name, alias in parsed_fields:
-        select_parts.append(f"{agg_func}({column_name}) as {alias}")
+    select_parts.extend(
+        f"{agg_func}({column_name}) as {alias}"
+        for agg_func, column_name, alias in parsed_fields
+    )
 
     select_parts.append("COUNT(*) as count")
 
@@ -180,7 +183,7 @@ def _select_parts_from_aggregation_fields(
 def query_daily_aggregated_data(
     db_path: str,
     aggregation_fields: list[str],
-    prior_days: int | str = 7,
+    prior_days: int = 7,
     table_name: str = _DEFAULT_TABLE_NAME,
     date_column: str = _TS_COL,
 ) -> dict[str, dict[str, float | int]]:
@@ -189,7 +192,7 @@ def query_daily_aggregated_data(
     Args:
         db_path: Path to SQLite database file
         aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
-        prior_days: Number of days to include in the query (not )
+        prior_days: Number of days to include in the query (not including today)
         table_name: Name of the table to query (default: "observations")
         date_column: Name of the timestamp column (default: "ts")
 
@@ -213,17 +216,20 @@ def query_daily_aggregated_data(
         datetime_expression=f"DATE({date_column}) as date",
     )
 
+    if not isinstance(prior_days, int):
+        raise InvalidPriorDaysError(prior_days)
+
     # Construct the full query
     query = f"""
     SELECT
         {','.join(select_parts)}
     FROM {table_name}
-    WHERE DATE({date_column}) >= DATE('now', '-{int(prior_days)} days')
+    WHERE DATE({date_column}) >= DATE('now', '-{prior_days} days')
     GROUP BY DATE({date_column})
     ORDER BY date
     """
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro") as conn:
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         # Enable row factory to get column names
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -234,7 +240,7 @@ def query_daily_aggregated_data(
         result = {}
         for row in cursor:
             date_key = row["date"]
-            row_dict = {key: row[key] for key in row if key != "date"}
+            row_dict = {key: row[key] for key in row.keys() if key != "date"}
             result[date_key] = row_dict
 
         return result
@@ -246,7 +252,7 @@ def query_hourly_aggregated_data(
     date: str,
     table_name: str = _DEFAULT_TABLE_NAME,
     date_column: str = _TS_COL,
-) -> dict[str, dict[str, float | int]]:
+) -> list[dict[str, float | int] | None]:
     """Query SQLite database with dynamic aggregation fields.
 
     Args:
@@ -274,11 +280,11 @@ def query_hourly_aggregated_data(
         {','.join(select_parts)}
     FROM {table_name}
     WHERE DATE({date_column}) = '{date}'
-    GROUP BY strftime('%Y-%m-%d %H', ts)
+    GROUP BY strftime('%Y-%m-%d %H', {date_column})
     ORDER BY hour
     """
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro") as conn:
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         # Enable row factory to get column names
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -286,10 +292,8 @@ def query_hourly_aggregated_data(
         cursor.execute(query)
 
         # Convert to nested dict format
-        result = {}
+        result: list[dict[str, float | int] | None] = [None] * 24
         for row in cursor:
-            date_key = row["hour"]
-            row_dict = {key: row[key] for key in row if key != "hour"}
-            result[date_key] = row_dict
+            result[int(row["hour"])] = dict(row)
 
         return result

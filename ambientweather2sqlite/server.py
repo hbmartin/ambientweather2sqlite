@@ -56,13 +56,27 @@ def create_request_handler(  # noqa: C901
             try:
                 query = parse_qs(urlparse(self.path).query)
                 aggregation_fields = query.get("q", [])
-                prior_days = query.get("days", ["7"])[0]
+
+                prior_days = 7
+                prior_days_query = query.get("days", [])
+                if len(prior_days_query) != 0:
+                    try:
+                        prior_days = int(prior_days_query[0])
+                    except (ValueError, TypeError):
+                        self._send_json(
+                            {
+                                "error": f"days must be int, got {prior_days_query[0]}",
+                            },
+                            400,
+                        )
+                        return
+
                 data = query_daily_aggregated_data(
                     db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
                     prior_days=prior_days,
                 )
-                self._send_json(data)
+                self._send_json({"data": data})
             except Aw2SqliteError as e:
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
@@ -86,7 +100,7 @@ def create_request_handler(  # noqa: C901
                     aggregation_fields=aggregation_fields,
                     date=date[0],
                 )
-                self._send_json(data)
+                self._send_json({"data": data})
             except Aw2SqliteError as e:
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
