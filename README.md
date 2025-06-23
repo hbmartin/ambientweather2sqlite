@@ -14,9 +14,10 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 * Local Network Operation: Direct connection to weather stations without external API dependencies
 * Continuous Data Collection: Automated daemon process collecting data at 60-second intervals
 * Dynamic Schema Management: Automatic database schema evolution as new sensors are detected
-* HTTP JSON API: Optional web server providing live data access
+* HTTP JSON API: Optional web server providing live data access, Includes hourly and daily aggregation endpoints.
 * Interactive Configuration: Command-line setup wizard for initial configuration
 * Cross-Platform Distribution: Available via PyPI with pipx installation
+* Zero Dependencies: Pure Python with no (potentially) untrusted 3rd parties.
 
 ## Installation
 
@@ -31,6 +32,16 @@ On the first run of `ambientweather2sqlite` you will be asked to provide the sta
 This config file is saved to your current directory by default but may be stored anywhere.
 
 On subsequent runs, you can pass the file name as a command line argument or it will be automatically detected in your current directory or at `~/.aw2sqlite.toml`
+
+## Development
+
+Pull requests and issue reports are welcome. For major changes, please open an issue first to discuss what you would like to change.
+
+### Core Architecture
+<img src="media/arch.svg" />
+
+### Control Flow
+<img src="media/flow.svg" />
 
 ## Legal
 
