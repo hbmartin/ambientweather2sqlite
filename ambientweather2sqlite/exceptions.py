@@ -2,6 +2,11 @@ class Aw2SqliteError(Exception):
     pass
 
 
+class InvalidTimezoneError(Aw2SqliteError):
+    def __init__(self, tz: str):
+        super().__init__(f"Invalid timezone: {tz}")
+
+
 class InvalidPriorDaysError(Aw2SqliteError):
     def __init__(self, prior_days: str):
         super().__init__(f"prior_days must be an integer, got {prior_days}")

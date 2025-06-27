@@ -1,5 +1,6 @@
 import re
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -8,6 +9,7 @@ from .exceptions import (
     InvalidDateError,
     InvalidFormatError,
     InvalidPriorDaysError,
+    InvalidTimezoneError,
     MissingAggregationFieldsError,
     UnexpectedEmptyDictionaryError,
 )
@@ -124,15 +126,12 @@ def insert_dict_row(
 
     cursor = conn.cursor()
 
-    # Extract column names and values
     columns = [_column_name(c) for c in list(data_dict.keys())]
     values = list(data_dict.values())
 
-    # Create placeholders for the VALUES clause
     placeholders = ", ".join(["?" for _ in values])
     columns_str = ", ".join(columns)
 
-    # Construct and execute the INSERT statement
     query = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
     cursor.execute(query, values)
     conn.commit()
@@ -168,7 +167,6 @@ def _select_parts_from_aggregation_fields(
     if not parsed_fields:
         raise MissingAggregationFieldsError
 
-    # Build SELECT clause
     select_parts = [datetime_expression]
 
     select_parts.extend(
@@ -181,137 +179,110 @@ def _select_parts_from_aggregation_fields(
     return select_parts
 
 
+def _validate_timezone(tz: str | None) -> str:
+    if not tz:
+        return "localtime"
+
+    try:
+        offset_hours = float(tz.replace(":", "."))
+    except ValueError:
+        pass
+    else:
+        return f"{offset_hours} hours"
+
+    try:
+        if (offset := ZoneInfo(tz).utcoffset(datetime.now())) is not None:
+            hours = offset.total_seconds() / 3600
+            return f"{hours} hours"
+        raise InvalidTimezoneError(tz)
+    except (ModuleNotFoundError, ValueError, KeyError) as e:
+        raise InvalidTimezoneError(tz) from e
+
+
 def query_daily_aggregated_data(
     db_path: str,
     aggregation_fields: list[str],
     prior_days: int = 7,
-    table_name: str = _DEFAULT_TABLE_NAME,
-    date_column: str = _TS_COL,
     tz: str | None = None,
-) -> dict[str, dict[str, float | int]]:
+) -> list[dict[str, float | int | str]]:
     """Query SQLite database with dynamic aggregation fields.
 
     Args:
         db_path: Path to SQLite database file
         aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
         prior_days: Number of days to include in the query (not including today)
-        table_name: Name of the table to query (default: "observations")
-        date_column: Name of the timestamp column (default: "ts")
-        tz: Timezone string (e.g., 'America/New_York', '+05:30') for timestamp conversion
+        tz: Timezone string (e.g., 'America/New_York', '+05:30')
 
     Returns:
-        Dict keyed by date string, with each value being a dict of aggregated values
-
-    Example:
-        {
-            '2024-01-01': {
-                'avg_outHumi': 65.5,
-                'max_gustspeed': 25.3,
-                'sum_eventrain': 2.1,
-                'record_count': 144
-            },
-            '2024-01-02': {...}
-        }
+        Sorted list of dicts of aggregated values
 
     """
-    # Validate timezone if provided
-    if tz:
-        try:
-            ZoneInfo(tz)
-        except Exception:
-            raise ValueError(f"Invalid timezone: {tz}")
-    
-    # Handle timezone conversion in datetime expression
-    if tz:
-        datetime_expression = f"DATE({date_column}, '{tz}') as date"
-        date_filter_expr = f"DATE({date_column}, '{tz}')"
-        now_expr = f"DATE('now', '{tz}')"
-    else:
-        datetime_expression = f"DATE({date_column}) as date"
-        date_filter_expr = f"DATE({date_column})"
-        now_expr = "DATE('now')"
-    
+    if not isinstance(prior_days, int):
+        raise InvalidPriorDaysError(prior_days)
+
+    timezone = _validate_timezone(tz)
+
+    table_name: str = _DEFAULT_TABLE_NAME
+    date_column: str = _TS_COL
+
+    datetime_expression = f"DATE({date_column}, '{timezone}') as date"
+    date_filter_expr = f"DATE({date_column}, '{timezone}')"
+
     select_parts = _select_parts_from_aggregation_fields(
         aggregation_fields=aggregation_fields,
         datetime_expression=datetime_expression,
     )
 
-    if not isinstance(prior_days, int):
-        raise InvalidPriorDaysError(prior_days)
-
-    # Construct the full query
     query = f"""
     SELECT
         {','.join(select_parts)}
     FROM {table_name}
-    WHERE {date_filter_expr} >= {now_expr} || ' -{prior_days} days'
+    WHERE {date_filter_expr} >= DATE('now', '{timezone}', '-{prior_days} days')
     GROUP BY {date_filter_expr}
     ORDER BY date
     """
 
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-        # Enable row factory to get column names
         conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        cursor.execute(query)
-
-        # Convert to nested dict format
-        result = []
-        for row in cursor:
-            result.append(dict(row))
-
-        return result
+        cursor = conn.cursor().execute(query)
+        return [dict(row) for row in cursor]
 
 
 def query_hourly_aggregated_data(
     db_path: str,
     aggregation_fields: list[str],
     date: str,
-    table_name: str = _DEFAULT_TABLE_NAME,
-    date_column: str = _TS_COL,
     tz: str | None = None,
-) -> list[dict[str, float | int] | None]:
+) -> list[dict[str, float | int | str] | None]:
     """Query SQLite database with dynamic aggregation fields.
 
     Args:
         db_path: Path to SQLite database file
         aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
         date: Date to query (YYYY-MM-DD)
-        table_name: Name of the table to query (default: "observations")
-        date_column: Name of the timestamp column (default: "ts")
-        tz: Timezone string (e.g., 'America/New_York', '+05:30') for timestamp conversion
+        tz: Timezone string (e.g., 'America/New_York', '+05:30')
 
     Returns:
-        Dict keyed by date string, with each value being a dict of aggregated values
+        Sorted list of dicts of aggregated values
 
     """
+    table_name: str = _DEFAULT_TABLE_NAME
+    date_column: str = _TS_COL
+
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         raise InvalidDateError(date)
 
-    # Validate timezone if provided
-    if tz:
-        try:
-            ZoneInfo(tz)
-        except Exception:
-            raise ValueError(f"Invalid timezone: {tz}")
-    
-    # Handle timezone conversion in datetime expression
-    if tz:
-        datetime_expression = f"strftime('%H', {date_column}, '{tz}') as hour"
-        date_filter_expr = f"DATE({date_column}, '{tz}')"
-        group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{tz}')"
-    else:
-        datetime_expression = f"strftime('%H', {date_column}) as hour"
-        date_filter_expr = f"DATE({date_column})"
-        group_by_expr = f"strftime('%Y-%m-%d %H', {date_column})"
-    
+    timezone = _validate_timezone(tz)
+
+    datetime_expression = f"strftime('%H', {date_column}, '{timezone}') as hour"
+    date_filter_expr = f"DATE({date_column}, '{timezone}')"
+    group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{timezone}')"
+
     select_parts = _select_parts_from_aggregation_fields(
         aggregation_fields=aggregation_fields,
         datetime_expression=datetime_expression,
     )
 
-    # Construct the full query
     query = f"""
     SELECT
         {','.join(select_parts)}
@@ -324,12 +295,9 @@ def query_hourly_aggregated_data(
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         # Enable row factory to get column names
         conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        cursor = conn.cursor().execute(query)
 
-        cursor.execute(query)
-
-        # Convert to nested dict format
-        result: list[dict[str, float | int] | None] = [None for _ in range(24)]
+        result: list[dict[str, float | int | str] | None] = [None for _ in range(24)]
         for row in cursor:
             result[int(row["hour"])] = dict(row)
 
