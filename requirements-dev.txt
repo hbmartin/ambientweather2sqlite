@@ -4,15 +4,25 @@ black==25.1.0
     # via ambientweather2sqlite (pyproject.toml:dev)
 click==8.2.1
     # via black
+iniconfig==2.1.0
+    # via pytest
 mypy-extensions==1.1.0
     # via black
 packaging==25.0
-    # via black
+    # via
+    #   black
+    #   pytest
 pathspec==0.12.1
     # via black
 platformdirs==4.3.8
     # via black
+pluggy==1.6.0
+    # via pytest
+pygments==2.19.2
+    # via pytest
 pyrefly==0.20.2
+    # via ambientweather2sqlite (pyproject.toml:dev)
+pytest==8.4.1
     # via ambientweather2sqlite (pyproject.toml:dev)
 ruff==0.12.0
     # via ambientweather2sqlite (pyproject.toml:dev)

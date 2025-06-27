@@ -1,13 +1,19 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-from ambientweather2sqlite.exceptions import Aw2SqliteError
+from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneError
 
 from . import mureq
 from .awparser import extract_labels, extract_values
 from .database import query_daily_aggregated_data, query_hourly_aggregated_data
+
+
+def _tz_from_query(query: dict) -> str:
+    if tz_query := query.get("tz", []):
+        return unquote(tz_query[0])
+    raise InvalidTimezoneError("tz is required")
 
 
 def create_request_handler(  # noqa: C901
@@ -75,6 +81,7 @@ def create_request_handler(  # noqa: C901
                     db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
                     prior_days=prior_days,
+                    tz=_tz_from_query(query),
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
@@ -95,10 +102,12 @@ def create_request_handler(  # noqa: C901
                         400,
                     )
                     return
+
                 data = query_hourly_aggregated_data(
                     db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
                     date=date[0],
+                    tz=_tz_from_query(query),
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
