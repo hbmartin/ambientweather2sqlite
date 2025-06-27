@@ -3,6 +3,7 @@ name = "ambientweather2sqlite"
 version = "0.6.0"
 description = "A project to record weather observations from an AmbientWeather station over the local network - no API needed!"
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
 dependencies = []
 authors = [
@@ -15,7 +16,6 @@ classifiers = [
     "Framework :: Datasette",
     "Intended Audience :: End Users/Desktop",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -30,7 +30,7 @@ overcast-to-sqlite = "ambientweather2sqlite.__main__:main"
 dev = [
     "black>=25.1.0",
     "pyrefly>=0.19.2",
-    "pytest>=8.0.0",  
+    "pytest>=8.0.0",
     "ruff>=0.11.13",
     "ty>=0.0.1a10",
 ]
@@ -60,3 +60,6 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.setuptools]
+packages = ["ambientweather2sqlite"]
