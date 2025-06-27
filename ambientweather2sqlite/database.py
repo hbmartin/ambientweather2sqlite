@@ -180,19 +180,24 @@ def _select_parts_from_aggregation_fields(
 
 
 def _validate_timezone(tz: str | None) -> str:
-    if not tz:
+    if not tz or tz == "localtime":
         return "localtime"
 
     try:
         if ":" in tz:
             hours, minutes = map(int, tz.split(":"))
-            offset_hours = hours + (minutes / 60)
+            offset_hours = (
+                hours + (minutes / 60) if hours >= 0 else hours - (minutes / 60)
+            )
         else:
-            hours = float(tz)
-            if hours > 24:
-                offset_hours = hours // 100 + (hours % 100 / 60)
+            val = float(tz)
+            # Heuristic for (+-)HHMM format
+            if abs(val) > 24:  # noqa: PLR2004
+                sign = -1 if val < 0 else 1
+                abs_val = abs(val)
+                offset_hours = sign * (abs_val // 100 + (abs_val % 100) / 60)
             else:
-                offset_hours = hours
+                offset_hours = val
     except ValueError:
         pass
     else:
@@ -202,9 +207,9 @@ def _validate_timezone(tz: str | None) -> str:
         if (offset := ZoneInfo(tz).utcoffset(datetime.now())) is not None:
             hours = offset.total_seconds() / 3600
             return f"{hours} hours"
-        raise InvalidTimezoneError(tz)
     except (ModuleNotFoundError, ValueError, KeyError) as e:
         raise InvalidTimezoneError(tz) from e
+    raise InvalidTimezoneError(tz)
 
 
 def query_daily_aggregated_data(

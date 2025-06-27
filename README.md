@@ -48,11 +48,10 @@ The optional web server provides live data access and aggregation endpoints:
 Query parameters:
 - `q` - Aggregation fields (e.g., `avg_outHumi`, `max_gustspeed`)
 - `days` - Number of prior days (default: 7)
-- `tz` - Timezone for timestamp conversion
+- `tz` - Timezone for timestamp conversion (required)
 
 Examples:
 ```
-/daily?q=avg_outTemp&q=max_gustspeed&days=14
 /daily?tz=America/New_York&q=avg_outHumi&days=7
 /daily?tz=Europe/London&q=min_outTemp&q=sum_eventrain
 ```
@@ -62,11 +61,10 @@ Examples:
 Query parameters:
 - `date` - Date in YYYY-MM-DD format (required)
 - `q` - Aggregation fields
-- `tz` - Timezone for timestamp conversion
+- `tz` - Timezone for timestamp conversion (required)
 
 Examples:
 ```
-/hourly?date=2025-06-27&q=avg_outTemp&q=max_windspeed
 /hourly?date=2025-06-27&tz=America/Chicago&q=avg_outHumi
 /hourly?date=2025-06-27&tz=%2B05%3A30&q=max_gustspeed
 ```
