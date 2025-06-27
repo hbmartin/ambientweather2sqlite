@@ -37,9 +37,13 @@ def create_request_handler(  # noqa: C901
 
         def _send_json(self, data: dict, status: int = 200) -> None:
             """Helper method to send JSON response."""
-            self._set_headers(status)
-            json_string = json.dumps(data, indent=2)
-            self.wfile.write(json_string.encode("utf-8"))
+            try:
+                self._set_headers(status)
+                json_string = json.dumps(data, indent=2)
+                self.wfile.write(json_string.encode("utf-8"))
+            except BrokenPipeError:
+                # Client disconnected before response was sent
+                pass
 
         def _send_live_data(self) -> None:
             try:
