@@ -1,7 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError
 
@@ -71,10 +71,17 @@ def create_request_handler(  # noqa: C901
                         )
                         return
 
+                # Handle timezone parameter
+                tz = None
+                tz_query = query.get("tz", [])
+                if tz_query:
+                    tz = unquote(tz_query[0])
+
                 data = query_daily_aggregated_data(
                     db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
                     prior_days=prior_days,
+                    tz=tz,
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
@@ -95,10 +102,17 @@ def create_request_handler(  # noqa: C901
                         400,
                     )
                     return
+                # Handle timezone parameter
+                tz = None
+                tz_query = query.get("tz", [])
+                if tz_query:
+                    tz = unquote(tz_query[0])
+
                 data = query_hourly_aggregated_data(
                     db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
                     date=date[0],
+                    tz=tz,
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:

@@ -1,6 +1,7 @@
 import re
 import sqlite3
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .exceptions import (
     InvalidColumnNameError,
@@ -186,6 +187,7 @@ def query_daily_aggregated_data(
     prior_days: int = 7,
     table_name: str = _DEFAULT_TABLE_NAME,
     date_column: str = _TS_COL,
+    tz: str | None = None,
 ) -> dict[str, dict[str, float | int]]:
     """Query SQLite database with dynamic aggregation fields.
 
@@ -195,6 +197,7 @@ def query_daily_aggregated_data(
         prior_days: Number of days to include in the query (not including today)
         table_name: Name of the table to query (default: "observations")
         date_column: Name of the timestamp column (default: "ts")
+        tz: Timezone string (e.g., 'America/New_York', '+05:30') for timestamp conversion
 
     Returns:
         Dict keyed by date string, with each value being a dict of aggregated values
@@ -211,9 +214,26 @@ def query_daily_aggregated_data(
         }
 
     """
+    # Validate timezone if provided
+    if tz:
+        try:
+            ZoneInfo(tz)
+        except Exception:
+            raise ValueError(f"Invalid timezone: {tz}")
+    
+    # Handle timezone conversion in datetime expression
+    if tz:
+        datetime_expression = f"DATE({date_column}, '{tz}') as date"
+        date_filter_expr = f"DATE({date_column}, '{tz}')"
+        now_expr = f"DATE('now', '{tz}')"
+    else:
+        datetime_expression = f"DATE({date_column}) as date"
+        date_filter_expr = f"DATE({date_column})"
+        now_expr = "DATE('now')"
+    
     select_parts = _select_parts_from_aggregation_fields(
         aggregation_fields=aggregation_fields,
-        datetime_expression=f"DATE({date_column}) as date",
+        datetime_expression=datetime_expression,
     )
 
     if not isinstance(prior_days, int):
@@ -224,8 +244,8 @@ def query_daily_aggregated_data(
     SELECT
         {','.join(select_parts)}
     FROM {table_name}
-    WHERE DATE({date_column}) >= DATE('now', '-{prior_days} days')
-    GROUP BY DATE({date_column})
+    WHERE {date_filter_expr} >= {now_expr} || ' -{prior_days} days'
+    GROUP BY {date_filter_expr}
     ORDER BY date
     """
 
@@ -237,11 +257,9 @@ def query_daily_aggregated_data(
         cursor.execute(query)
 
         # Convert to nested dict format
-        result = {}
+        result = []
         for row in cursor:
-            date_key = row["date"]
-            row_dict = {key: row[key] for key in row.keys() if key != "date"}
-            result[date_key] = row_dict
+            result.append(dict(row))
 
         return result
 
@@ -252,6 +270,7 @@ def query_hourly_aggregated_data(
     date: str,
     table_name: str = _DEFAULT_TABLE_NAME,
     date_column: str = _TS_COL,
+    tz: str | None = None,
 ) -> list[dict[str, float | int] | None]:
     """Query SQLite database with dynamic aggregation fields.
 
@@ -261,6 +280,7 @@ def query_hourly_aggregated_data(
         date: Date to query (YYYY-MM-DD)
         table_name: Name of the table to query (default: "observations")
         date_column: Name of the timestamp column (default: "ts")
+        tz: Timezone string (e.g., 'America/New_York', '+05:30') for timestamp conversion
 
     Returns:
         Dict keyed by date string, with each value being a dict of aggregated values
@@ -269,9 +289,26 @@ def query_hourly_aggregated_data(
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         raise InvalidDateError(date)
 
+    # Validate timezone if provided
+    if tz:
+        try:
+            ZoneInfo(tz)
+        except Exception:
+            raise ValueError(f"Invalid timezone: {tz}")
+    
+    # Handle timezone conversion in datetime expression
+    if tz:
+        datetime_expression = f"strftime('%H', {date_column}, '{tz}') as hour"
+        date_filter_expr = f"DATE({date_column}, '{tz}')"
+        group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{tz}')"
+    else:
+        datetime_expression = f"strftime('%H', {date_column}) as hour"
+        date_filter_expr = f"DATE({date_column})"
+        group_by_expr = f"strftime('%Y-%m-%d %H', {date_column})"
+    
     select_parts = _select_parts_from_aggregation_fields(
         aggregation_fields=aggregation_fields,
-        datetime_expression=f"strftime('%H', {date_column}) as hour",
+        datetime_expression=datetime_expression,
     )
 
     # Construct the full query
@@ -279,8 +316,8 @@ def query_hourly_aggregated_data(
     SELECT
         {','.join(select_parts)}
     FROM {table_name}
-    WHERE DATE({date_column}) = '{date}'
-    GROUP BY strftime('%Y-%m-%d %H', {date_column})
+    WHERE {date_filter_expr} = '{date}'
+    GROUP BY {group_by_expr}
     ORDER BY hour
     """
 

@@ -33,6 +33,51 @@ This config file is saved to your current directory by default but may be stored
 
 On subsequent runs, you can pass the file name as a command line argument or it will be automatically detected in your current directory or at `~/.aw2sqlite.toml`
 
+## HTTP JSON API
+
+The optional web server provides live data access and aggregation endpoints:
+
+### Endpoints
+
+- **`/`** - Live weather data
+- **`/daily`** - Daily aggregated data  
+- **`/hourly`** - Hourly aggregated data for a specific date
+
+### Daily Aggregation
+
+Query parameters:
+- `q` - Aggregation fields (e.g., `avg_outHumi`, `max_gustspeed`)
+- `days` - Number of prior days (default: 7)
+- `tz` - Timezone for timestamp conversion
+
+Examples:
+```
+/daily?q=avg_outTemp&q=max_gustspeed&days=14
+/daily?tz=America/New_York&q=avg_outHumi&days=7
+/daily?tz=Europe/London&q=min_outTemp&q=sum_eventrain
+```
+
+### Hourly Aggregation
+
+Query parameters:
+- `date` - Date in YYYY-MM-DD format (required)
+- `q` - Aggregation fields
+- `tz` - Timezone for timestamp conversion
+
+Examples:
+```
+/hourly?date=2025-06-27&q=avg_outTemp&q=max_windspeed
+/hourly?date=2025-06-27&tz=America/Chicago&q=avg_outHumi
+/hourly?date=2025-06-27&tz=%2B05%3A30&q=max_gustspeed
+```
+
+### Timezone Support
+
+Timezone strings can be:
+- IANA timezone names: `America/New_York`, `Europe/London`, `Asia/Tokyo`
+- UTC offsets: `+05:30`, `-08:00`
+- URL-encoded when necessary: `%2B05%3A30` for `+05:30`
+
 ## Development
 
 Pull requests and issue reports are welcome. For major changes, please open an issue first to discuss what you would like to change.
