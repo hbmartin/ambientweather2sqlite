@@ -184,7 +184,15 @@ def _validate_timezone(tz: str | None) -> str:
         return "localtime"
 
     try:
-        offset_hours = float(tz.replace(":", "."))
+        if ":" in tz:
+            hours, minutes = map(int, tz.split(":"))
+            offset_hours = hours + (minutes / 60)
+        else:
+            hours = float(tz)
+            if hours > 24:
+                offset_hours = hours // 100 + (hours % 100 / 60)
+            else:
+                offset_hours = hours
     except ValueError:
         pass
     else:
@@ -263,7 +271,7 @@ def query_hourly_aggregated_data(
         tz: Timezone string (e.g., 'America/New_York', '+05:30')
 
     Returns:
-        Sorted list of dicts of aggregated values
+        Sorted list of dicts of aggregates or None for each hour
 
     """
     table_name: str = _DEFAULT_TABLE_NAME
