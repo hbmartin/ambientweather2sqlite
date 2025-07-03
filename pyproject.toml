@@ -1,6 +1,6 @@
 [project]
 name = "ambientweather2sqlite"
-version = "0.6.0"
+version = "0.6.1"
 description = "A project to record weather observations from an AmbientWeather station over the local network - no API needed!"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 [project.scripts]
-overcast-to-sqlite = "ambientweather2sqlite.__main__:main"
+ambientweather2sqlite = "ambientweather2sqlite.__main__:main"
 
 [dependency-groups]
 dev = [
