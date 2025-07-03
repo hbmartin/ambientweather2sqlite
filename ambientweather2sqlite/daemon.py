@@ -8,7 +8,7 @@ from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
 from ambientweather2sqlite.server import Server
 
-from .database import insert_observation
+from .database import insert_observation, initialize_database, get_db_manager
 from .metadata import create_metadata
 
 
@@ -32,6 +32,10 @@ def start_daemon(
 ) -> None:
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")
+    
+    # Initialize database manager
+    initialize_database(database_path)
+    
     labels, _ = create_metadata(database_path, live_data_url)
 
     server = None
@@ -54,6 +58,11 @@ def start_daemon(
                 remove_newlines = 1
                 continue
             except HTTPException as e:
+                try:
+                    db_manager = get_db_manager()
+                    db_manager.log_error(type(e).__name__, str(e))
+                except Exception:
+                    pass
                 print(f"Error fetching live data: {e}")
                 remove_newlines = 1
                 wait_for_next_update(period_seconds)
@@ -72,4 +81,9 @@ def start_daemon(
         print(f"\nStopping... results saved to {database_path}")
         if server is not None:
             server.shutdown()
+        try:
+            db_manager = get_db_manager()
+            db_manager.close()
+        except Exception:
+            pass
         sys.exit(0)

@@ -7,7 +7,7 @@ from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneErro
 
 from . import mureq
 from .awparser import extract_labels, extract_values
-from .database import query_daily_aggregated_data, query_hourly_aggregated_data
+from .database import query_daily_aggregated_data, query_hourly_aggregated_data, get_db_manager
 
 
 def _tz_from_query(query: dict) -> str:
@@ -49,6 +49,11 @@ def create_request_handler(  # noqa: C901
             try:
                 body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
             except Exception as e:  # noqa: BLE001
+                try:
+                    db_manager = get_db_manager()
+                    db_manager.log_error(type(e).__name__, str(e))
+                except Exception:
+                    pass
                 self._send_json({"error": str(e)}, 500)
                 return
             values = extract_values(body)
@@ -89,8 +94,18 @@ def create_request_handler(  # noqa: C901
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
+                try:
+                    db_manager = get_db_manager()
+                    db_manager.log_error(type(e).__name__, str(e))
+                except Exception:
+                    pass
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
+                try:
+                    db_manager = get_db_manager()
+                    db_manager.log_error(type(e).__name__, str(e))
+                except Exception:
+                    pass
                 self._send_json({"error": str(e)}, 500)
 
         def _send_hourly_aggregated_data(self) -> None:
@@ -115,8 +130,18 @@ def create_request_handler(  # noqa: C901
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
+                try:
+                    db_manager = get_db_manager()
+                    db_manager.log_error(type(e).__name__, str(e))
+                except Exception:
+                    pass
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
+                try:
+                    db_manager = get_db_manager()
+                    db_manager.log_error(type(e).__name__, str(e))
+                except Exception:
+                    pass
                 self._send_json({"error": str(e)}, 500)
 
         def do_GET(self):

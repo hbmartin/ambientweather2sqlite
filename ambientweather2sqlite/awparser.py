@@ -26,6 +26,12 @@ class DisabledInputParser(HTMLParser):
                     try:
                         self.filtered_values[name] = float(value)
                     except ValueError:
+                        try:
+                            from .database import get_db_manager
+                            db_manager = get_db_manager()
+                            db_manager.log_error("ValueError", f"Failed to convert {value} to float for {name}")
+                        except Exception:
+                            pass
                         self.filtered_values[name] = None
 
 

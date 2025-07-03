@@ -18,6 +18,48 @@ _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 
 
+class DatabaseManager:
+    """Manages persistent database connections and operations."""
+    
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.conn = None
+        self._connect()
+        self._ensure_logs_table()
+    
+    def _connect(self):
+        """Establish database connection."""
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+    
+    def _ensure_logs_table(self):
+        """Create logs table if it doesn't exist."""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS logs (
+                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                error TEXT,
+                message TEXT
+            )
+        ''')
+        self.conn.commit()
+    
+    def log_error(self, error_name: str, message: str):
+        """Log an error to the database."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'INSERT INTO logs (error, message) VALUES (?, ?)',
+            (error_name, message)
+        )
+        self.conn.commit()
+    
+    def close(self):
+        """Close database connection."""
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+
+
 def _column_name(text: str) -> str:
     result = []
     for char in text:
@@ -142,6 +184,25 @@ def insert_observation(db_path: str, observation: dict[str, float | None]) -> No
     with sqlite3.connect(db_path) as conn:
         ensure_columns(conn, set(observation.keys()))
         insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
+
+
+# Global database manager instance
+db_manager = None
+
+
+def get_db_manager() -> DatabaseManager:
+    """Get the global database manager instance."""
+    global db_manager
+    if db_manager is None:
+        raise RuntimeError("Database manager not initialized")
+    return db_manager
+
+
+def initialize_database(db_path: str) -> DatabaseManager:
+    """Initialize the global database manager."""
+    global db_manager
+    db_manager = DatabaseManager(db_path)
+    return db_manager
 
 
 def _select_parts_from_aggregation_fields(

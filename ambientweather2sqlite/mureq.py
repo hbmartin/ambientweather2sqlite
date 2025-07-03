@@ -72,6 +72,12 @@ def request(
         except HTTPException:
             raise
         except OSError as e:
+            try:
+                from .database import get_db_manager
+                db_manager = get_db_manager()
+                db_manager.log_error(type(e).__name__, str(e))
+            except Exception:
+                pass
             raise HTTPException(str(e)) from e
         return Response(
             response.url,
@@ -213,6 +219,12 @@ def yield_response(  # noqa: PLR0913
             except OSError as e:
                 # wrap any IOError that is not already an HTTPException
                 # in HTTPException, exposing a uniform API for remote errors
+                try:
+                    from .database import get_db_manager
+                    db_manager = get_db_manager()
+                    db_manager.log_error(type(e).__name__, str(e))
+                except Exception:
+                    pass
                 raise HTTPException(str(e)) from e
             redirect_url = _check_redirect(url, response.status, response.headers)
             if max_redirects is None or redirect_url is None:
@@ -343,7 +355,13 @@ class UnixHTTPConnection(HTTPConnection):
         try:
             sock.settimeout(self.timeout)
             sock.connect(self._unix_path)
-        except Exception:
+        except Exception as e:
+            try:
+                from .database import get_db_manager
+                db_manager = get_db_manager()
+                db_manager.log_error(type(e).__name__, str(e))
+            except Exception:
+                pass
             sock.close()
             raise
         self.sock = sock

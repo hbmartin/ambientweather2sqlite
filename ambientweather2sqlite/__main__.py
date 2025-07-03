@@ -15,7 +15,12 @@ def get_int_argument(args: list[str]) -> int | None:
         try:
             return int(arg)
         except ValueError:
-            pass
+            try:
+                from .database import get_db_manager
+                db_manager = get_db_manager()
+                db_manager.log_error("ValueError", f"Failed to convert {arg} to int")
+            except Exception:
+                pass
     return None
 
 
