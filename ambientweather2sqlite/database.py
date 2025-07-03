@@ -351,4 +351,5 @@ def get_db_manager(db_path: str | None = None) -> DatabaseManager:
         if db_path is None:
             raise DatabaseNotInitializedError
         db_manager = DatabaseManager(db_path)
-    return db_manager
+
+    return db_manager  # ty: ignore[invalid-return-type]
