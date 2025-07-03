@@ -17,49 +17,6 @@ from .exceptions import (
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 
-
-class DatabaseManager:
-    """Manages persistent database connections and operations."""
-    
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.conn = None
-        self._connect()
-        self._ensure_logs_table()
-    
-    def _connect(self):
-        """Establish database connection."""
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-    
-    def _ensure_logs_table(self):
-        """Create logs table if it doesn't exist."""
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS logs (
-                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                error TEXT,
-                message TEXT
-            )
-        ''')
-        self.conn.commit()
-    
-    def log_error(self, error_name: str, message: str):
-        """Log an error to the database."""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            'INSERT INTO logs (error, message) VALUES (?, ?)',
-            (error_name, message)
-        )
-        self.conn.commit()
-    
-    def close(self):
-        """Close database connection."""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-
-
 def _column_name(text: str) -> str:
     result = []
     for char in text:
@@ -69,141 +26,37 @@ def _column_name(text: str) -> str:
             result.append("_")
     return "".join(result)
 
+def _validate_timezone(tz: str | None) -> str:
+    if not tz or tz == "localtime":
+        return "localtime"
 
-def ensure_columns(
-    conn: sqlite3.Connection,
-    required_columns: set[str],
-    table_name: str = _DEFAULT_TABLE_NAME,
-) -> list[str]:
-    """Checks if a table has columns for every string in required_columns.
-    If not, adds the missing columns with REAL type.
-
-    Args:
-        conn (sqlite3.Connection): Connection to the SQLite database
-        required_columns (set): Set of column names that should exist
-        table_name (str): Name of the table to check/modify
-
-    Returns:
-        list: List of column names that were added
-
-    Raises:
-        sqlite3.Error: If there's a database error
-
-    """
-    added_columns = []
-
-    cursor = conn.cursor()
-
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    existing_columns = {row[1] for row in cursor.fetchall()}  # row[1] is column name
-
-    missing_columns = required_columns - existing_columns
-
-    for column_name in missing_columns:
-        valid_column_name = _column_name(column_name)
-        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {valid_column_name} REAL")
-        added_columns.append(column_name)
-
-    cursor.close()
-    conn.commit()
-
-    return added_columns
-
-
-def create_database_if_not_exists(
-    db_path: str,
-    table_name: str = _DEFAULT_TABLE_NAME,
-) -> bool:
-    """Check if a SQLite database exists at the specified path.
-    If not, create the database and a table with the given name.
-
-    Args:
-        db_path (str): Path to the SQLite database file
-        table_name (str): Name of the table to create
-
-    Returns:
-        bool: True if database was created, False if it already existed
-
-    """
-    if Path(db_path).exists():
-        return False
-
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-
-        table_schema = f"""
-            CREATE TABLE {table_name} (
-                {_TS_COL} TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    try:
+        if ":" in tz:
+            hours, minutes = map(int, tz.split(":"))
+            offset_hours = (
+                hours + (minutes / 60) if hours >= 0 else hours - (minutes / 60)
             )
-        """
+        else:
+            val = float(tz)
+            # Heuristic for (+-)HHMM format
+            if abs(val) > 24:  # noqa: PLR2004
+                sign = -1 if val < 0 else 1
+                abs_val = abs(val)
+                offset_hours = sign * (abs_val // 100 + (abs_val % 100) / 60)
+            else:
+                offset_hours = val
+    except ValueError:
+        pass
+    else:
+        return f"{offset_hours} hours"
 
-        cursor.execute(table_schema)
-        conn.commit()
-
-        print(f"Database created with table '{table_name}' at: {db_path}")
-        return True
-
-
-def insert_dict_row(
-    conn: sqlite3.Connection,
-    table_name: str,
-    data_dict: dict[str, float | None],
-) -> int | None:
-    """Alternative version that takes an existing connection.
-
-    Args:
-        conn (sqlite3.Connection): Existing database connection
-        table_name (str): Name of the table to insert into
-        data_dict (dict): Dictionary where keys are column names and values are the data
-
-    Returns:
-        int: The rowid of the inserted row
-
-    Note:
-        This version does not automatically commit. Call conn.commit() if needed.
-
-    """
-    if not data_dict:
-        raise UnexpectedEmptyDictionaryError
-
-    cursor = conn.cursor()
-
-    columns = [_column_name(c) for c in list(data_dict.keys())]
-    values = list(data_dict.values())
-
-    placeholders = ", ".join(["?" for _ in values])
-    columns_str = ", ".join(columns)
-
-    query = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
-    cursor.execute(query, values)
-    conn.commit()
-    return cursor.lastrowid
-
-
-def insert_observation(db_path: str, observation: dict[str, float | None]) -> None:
-    with sqlite3.connect(db_path) as conn:
-        ensure_columns(conn, set(observation.keys()))
-        insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
-
-
-# Global database manager instance
-db_manager = None
-
-
-def get_db_manager() -> DatabaseManager:
-    """Get the global database manager instance."""
-    global db_manager
-    if db_manager is None:
-        raise RuntimeError("Database manager not initialized")
-    return db_manager
-
-
-def initialize_database(db_path: str) -> DatabaseManager:
-    """Initialize the global database manager."""
-    global db_manager
-    db_manager = DatabaseManager(db_path)
-    return db_manager
-
+    try:
+        if (offset := ZoneInfo(tz).utcoffset(datetime.now())) is not None:
+            hours = offset.total_seconds() / 3600
+            return f"{hours} hours"
+    except (ModuleNotFoundError, ValueError, KeyError) as e:
+        raise InvalidTimezoneError(tz) from e
+    raise InvalidTimezoneError(tz)
 
 def _select_parts_from_aggregation_fields(
     aggregation_fields: list[str],
@@ -239,140 +92,268 @@ def _select_parts_from_aggregation_fields(
 
     return select_parts
 
-
-def _validate_timezone(tz: str | None) -> str:
-    if not tz or tz == "localtime":
-        return "localtime"
-
-    try:
-        if ":" in tz:
-            hours, minutes = map(int, tz.split(":"))
-            offset_hours = (
-                hours + (minutes / 60) if hours >= 0 else hours - (minutes / 60)
+class DatabaseManager:
+    """Manages persistent database connections and operations."""
+    
+    def __init__(self, db_path: str):
+        if not Path(db_path).exists():
+            self._create_database_if_not_exists(db_path)
+        self.conn: sqlite3.Connection = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self._ensure_logs_table()
+    
+    def _ensure_logs_table(self):
+        """Create logs table if it doesn't exist."""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS logs (
+                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                error TEXT,
+                message TEXT
             )
-        else:
-            val = float(tz)
-            # Heuristic for (+-)HHMM format
-            if abs(val) > 24:  # noqa: PLR2004
-                sign = -1 if val < 0 else 1
-                abs_val = abs(val)
-                offset_hours = sign * (abs_val // 100 + (abs_val % 100) / 60)
-            else:
-                offset_hours = val
-    except ValueError:
-        pass
-    else:
-        return f"{offset_hours} hours"
-
-    try:
-        if (offset := ZoneInfo(tz).utcoffset(datetime.now())) is not None:
-            hours = offset.total_seconds() / 3600
-            return f"{hours} hours"
-    except (ModuleNotFoundError, ValueError, KeyError) as e:
-        raise InvalidTimezoneError(tz) from e
-    raise InvalidTimezoneError(tz)
+        ''')
+        self.conn.commit()
+    
+    def log_error(self, error_name: str, message: str):
+        """Log an error to the database."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'INSERT INTO logs (error, message) VALUES (?, ?)',
+            (error_name, message)
+        )
+        self.conn.commit()
+    
+    def close(self):
+        """Close database connection."""
+        self.conn.close()
 
 
-def query_daily_aggregated_data(
-    db_path: str,
-    aggregation_fields: list[str],
-    prior_days: int = 7,
-    tz: str | None = None,
-) -> list[dict[str, float | int | str]]:
-    """Query SQLite database with dynamic aggregation fields.
+    def ensure_columns(
+        self,
+        required_columns: set[str],
+        table_name: str = _DEFAULT_TABLE_NAME,
+    ) -> list[str]:
+        """Checks if a table has columns for every string in required_columns.
+        If not, adds the missing columns with REAL type.
 
-    Args:
-        db_path: Path to SQLite database file
-        aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
-        prior_days: Number of days to include in the query (not including today)
-        tz: Timezone string (e.g., 'America/New_York', '+05:30')
+        Args:
+            conn (sqlite3.Connection): Connection to the SQLite database
+            required_columns (set): Set of column names that should exist
+            table_name (str): Name of the table to check/modify
 
-    Returns:
-        Sorted list of dicts of aggregated values
+        Returns:
+            list: List of column names that were added
 
-    """
-    if not isinstance(prior_days, int):
-        raise InvalidPriorDaysError(prior_days)
+        Raises:
+            sqlite3.Error: If there's a database error
 
-    timezone = _validate_timezone(tz)
+        """
+        added_columns = []
 
-    table_name: str = _DEFAULT_TABLE_NAME
-    date_column: str = _TS_COL
+        cursor = self.conn.cursor()
 
-    datetime_expression = f"DATE({date_column}, '{timezone}') as date"
-    date_filter_expr = f"DATE({date_column}, '{timezone}')"
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        existing_columns = {row[1] for row in cursor.fetchall()}  # row[1] is column name
 
-    select_parts = _select_parts_from_aggregation_fields(
-        aggregation_fields=aggregation_fields,
-        datetime_expression=datetime_expression,
-    )
+        missing_columns = required_columns - existing_columns
 
-    query = f"""
-    SELECT
-        {','.join(select_parts)}
-    FROM {table_name}
-    WHERE {date_filter_expr} >= DATE('now', '{timezone}', '-{prior_days} days')
-    GROUP BY {date_filter_expr}
-    ORDER BY date
-    """
+        for column_name in missing_columns:
+            valid_column_name = _column_name(column_name)
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {valid_column_name} REAL")
+            added_columns.append(column_name)
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor().execute(query)
+        cursor.close()
+        self.conn.commit()
+
+        return added_columns
+
+
+    def _create_database_if_not_exists(
+        self,
+        db_path: str,
+        table_name: str = _DEFAULT_TABLE_NAME,
+    ) -> bool:
+        """Check if a SQLite database exists at the specified path.
+        If not, create the database and a table with the given name.
+
+        Args:
+            db_path (str): Path to the SQLite database file
+            table_name (str): Name of the table to create
+
+        Returns:
+            bool: True if database was created, False if it already existed
+
+        """
+
+
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+
+            table_schema = f"""
+                CREATE TABLE {table_name} (
+                    {_TS_COL} TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+
+            cursor.execute(table_schema)
+            conn.commit()
+
+            print(f"Database created with table '{table_name}' at: {db_path}")
+            return True
+
+
+    def insert_dict_row(
+        self,
+        table_name: str,
+        data_dict: dict[str, float | None],
+    ) -> int | None:
+        """Alternative version that takes an existing connection.
+
+        Args:
+            conn (sqlite3.Connection): Existing database connection
+            table_name (str): Name of the table to insert into
+            data_dict (dict): Dictionary where keys are column names and values are the data
+
+        Returns:
+            int: The rowid of the inserted row
+
+        Note:
+            This version does not automatically commit. Call conn.commit() if needed.
+
+        """
+        if not data_dict:
+            raise UnexpectedEmptyDictionaryError
+
+        cursor = self.conn.cursor()
+
+        columns = [_column_name(c) for c in list(data_dict.keys())]
+        values = list(data_dict.values())
+
+        placeholders = ", ".join(["?" for _ in values])
+        columns_str = ", ".join(columns)
+
+        query = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+        cursor.execute(query, values)
+        self.conn.commit()
+        return cursor.lastrowid
+
+
+    def insert_observation(self, observation: dict[str, float | None]) -> None:
+        self.ensure_columns(set(observation.keys()))
+        self.insert_dict_row(_DEFAULT_TABLE_NAME, observation)
+
+
+
+    def query_daily_aggregated_data(
+        self,
+        aggregation_fields: list[str],
+        prior_days: int = 7,
+        tz: str | None = None,
+    ) -> list[dict[str, float | int | str]]:
+        """Query SQLite database with dynamic aggregation fields.
+
+        Args:
+            db_path: Path to SQLite database file
+            aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
+            prior_days: Number of days to include in the query (not including today)
+            tz: Timezone string (e.g., 'America/New_York', '+05:30')
+
+        Returns:
+            Sorted list of dicts of aggregated values
+
+        """
+        if not isinstance(prior_days, int):
+            raise InvalidPriorDaysError(prior_days)
+
+        timezone = _validate_timezone(tz)
+
+        table_name: str = _DEFAULT_TABLE_NAME
+        date_column: str = _TS_COL
+
+        datetime_expression = f"DATE({date_column}, '{timezone}') as date"
+        date_filter_expr = f"DATE({date_column}, '{timezone}')"
+
+        select_parts = _select_parts_from_aggregation_fields(
+            aggregation_fields=aggregation_fields,
+            datetime_expression=datetime_expression,
+        )
+
+        query = f"""
+        SELECT
+            {','.join(select_parts)}
+        FROM {table_name}
+        WHERE {date_filter_expr} >= DATE('now', '{timezone}', '-{prior_days} days')
+        GROUP BY {date_filter_expr}
+        ORDER BY date
+        """
+
+        cursor = self.conn.cursor()
+        cursor.execute(query)
         return [dict(row) for row in cursor]
 
 
-def query_hourly_aggregated_data(
-    db_path: str,
-    aggregation_fields: list[str],
-    date: str,
-    tz: str | None = None,
-) -> list[dict[str, float | int | str] | None]:
-    """Query SQLite database with dynamic aggregation fields.
+    def query_hourly_aggregated_data(
+        self,
+        aggregation_fields: list[str],
+        date: str,
+        tz: str | None = None,
+    ) -> list[dict[str, float | int | str] | None]:
+        """Query SQLite database with dynamic aggregation fields.
 
-    Args:
-        db_path: Path to SQLite database file
-        aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
-        date: Date to query (YYYY-MM-DD)
-        tz: Timezone string (e.g., 'America/New_York', '+05:30')
+        Args:
+            db_path: Path to SQLite database file
+            aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
+            date: Date to query (YYYY-MM-DD)
+            tz: Timezone string (e.g., 'America/New_York', '+05:30')
 
-    Returns:
-        Sorted list of dicts of aggregates or None for each hour
+        Returns:
+            Sorted list of dicts of aggregates or None for each hour
 
-    """
-    table_name: str = _DEFAULT_TABLE_NAME
-    date_column: str = _TS_COL
+        """
+        table_name: str = _DEFAULT_TABLE_NAME
+        date_column: str = _TS_COL
 
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
-        raise InvalidDateError(date)
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+            raise InvalidDateError(date)
 
-    timezone = _validate_timezone(tz)
+        timezone = _validate_timezone(tz)
 
-    datetime_expression = f"strftime('%H', {date_column}, '{timezone}') as hour"
-    date_filter_expr = f"DATE({date_column}, '{timezone}')"
-    group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{timezone}')"
+        datetime_expression = f"strftime('%H', {date_column}, '{timezone}') as hour"
+        date_filter_expr = f"DATE({date_column}, '{timezone}')"
+        group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{timezone}')"
 
-    select_parts = _select_parts_from_aggregation_fields(
-        aggregation_fields=aggregation_fields,
-        datetime_expression=datetime_expression,
-    )
+        select_parts = _select_parts_from_aggregation_fields(
+            aggregation_fields=aggregation_fields,
+            datetime_expression=datetime_expression,
+        )
 
-    query = f"""
-    SELECT
-        {','.join(select_parts)}
-    FROM {table_name}
-    WHERE {date_filter_expr} = '{date}'
-    GROUP BY {group_by_expr}
-    ORDER BY hour
-    """
+        query = f"""
+        SELECT
+            {','.join(select_parts)}
+        FROM {table_name}
+        WHERE {date_filter_expr} = '{date}'
+        GROUP BY {group_by_expr}
+        ORDER BY hour
+        """
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-        # Enable row factory to get column names
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor().execute(query)
+        cursor = self.conn.cursor()
+        cursor.execute(query)
 
         result: list[dict[str, float | int | str] | None] = [None for _ in range(24)]
         for row in cursor:
             result[int(row["hour"])] = dict(row)
 
         return result
+
+# Global database manager instance
+db_manager: DatabaseManager | None = None
+
+
+def get_db_manager(db_path: str | None = None) -> DatabaseManager:
+    """Get the global database manager instance."""
+    global db_manager
+    if db_manager is None:
+        if db_path is None:
+            raise RuntimeError("Database manager not initialized")
+        db_manager = DatabaseManager(db_path)
+    return db_manager

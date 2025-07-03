@@ -6,7 +6,6 @@ from urllib.parse import urljoin
 from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_labels, extract_units
 from ambientweather2sqlite.units_mapping import units_for_columns
-from .database import get_db_manager
 
 
 def create_metadata(
@@ -25,11 +24,6 @@ def create_metadata(
         )
         labels_with_units, column_to_unit = units_for_columns(labels, units)
     except HTTPException as e:
-        try:
-            db_manager = get_db_manager()
-            db_manager.log_error(type(e).__name__, str(e))
-        except Exception:
-            pass
         print(f"Error fetching metadata labels: {e}")
         return {}, {}
     metadata = {
