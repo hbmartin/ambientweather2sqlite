@@ -1,4 +1,3 @@
-from pathlib import Path
 from unittest import TestCase
 
 from ambientweather2sqlite.database import (
@@ -50,7 +49,7 @@ class TestDatabaseTimezone(TestCase):
             self.db_manager.insert_observation(data)
 
     def tearDown(self):
-        Path(self.db_path).unlink(missing_ok=True)
+        self.db_manager.close()
 
     def test_query_daily_aggregated_data_with_valid_timezone(self):
         """Test daily aggregation with valid timezone"""

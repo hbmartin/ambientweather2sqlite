@@ -1,6 +1,7 @@
 import re
 import sqlite3
 from datetime import datetime
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from .exceptions import (
@@ -186,7 +187,7 @@ class DatabaseManager:
             table_name (str): Name of the table to create
 
         Returns:
-            bool: True if database was created, False if it already existed
+            sqlite3.Connection: Connection to the SQLite database
 
         """
         conn = sqlite3.connect(db_path)
@@ -352,4 +353,4 @@ def get_db_manager(db_path: str | None = None) -> DatabaseManager:
             raise DatabaseNotInitializedError
         db_manager = DatabaseManager(db_path)
 
-    return db_manager  # ty: ignore[invalid-return-type]
+    return cast("DatabaseManager", db_manager)
