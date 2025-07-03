@@ -7,6 +7,11 @@ class InvalidTimezoneError(Aw2SqliteError):
         super().__init__(f"Invalid timezone: {tz}")
 
 
+class DatabaseNotInitializedError(Aw2SqliteError):
+    def __init__(self):
+        super().__init__("Database manager not initialized, db_path is required")
+
+
 class InvalidPriorDaysError(Aw2SqliteError):
     def __init__(self, prior_days: str):
         super().__init__(f"prior_days must be an integer, got {prior_days}")

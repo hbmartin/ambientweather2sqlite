@@ -42,7 +42,10 @@ def create_request_handler(  # noqa: C901
                 json_string = json.dumps(data, indent=2)
                 self.wfile.write(json_string.encode("utf-8"))
             except BrokenPipeError:
-                self.DATABASE.log_error("BrokenPipeError", "Client disconnected before response was sent")
+                self.DATABASE.log_error(
+                    "BrokenPipeError",
+                    "Client disconnected before response was sent",
+                )
 
         def _send_live_data(self) -> None:
             try:
@@ -137,7 +140,13 @@ def create_request_handler(  # noqa: C901
 
 
 class Server:
-    def __init__(self, live_data_url: str, database: DatabaseManager, port: int, host: str):
+    def __init__(
+        self,
+        live_data_url: str,
+        database: DatabaseManager,
+        port: int,
+        host: str,
+    ):
         self.httpd = HTTPServer(
             (host, port),
             create_request_handler(live_data_url, database),

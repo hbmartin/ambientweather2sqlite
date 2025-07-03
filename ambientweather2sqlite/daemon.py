@@ -9,7 +9,6 @@ from ambientweather2sqlite.awparser import extract_values
 from ambientweather2sqlite.server import Server
 
 from .database import DatabaseManager
-from .metadata import create_metadata
 
 
 def clear_lines(n: int) -> None:
@@ -33,7 +32,6 @@ def start_daemon(
 ) -> None:
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")
-    
 
     server = None
 
@@ -74,8 +72,5 @@ def start_daemon(
         print("\nStopping...")
         if server is not None:
             server.shutdown()
-        try:
-            database.close()
-        except Exception:
-            pass
+        database.close()
         sys.exit(0)

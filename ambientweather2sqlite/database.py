@@ -1,10 +1,10 @@
 import re
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .exceptions import (
+    DatabaseNotInitializedError,
     InvalidColumnNameError,
     InvalidDateError,
     InvalidFormatError,
@@ -17,6 +17,7 @@ from .exceptions import (
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 
+
 def _column_name(text: str) -> str:
     result = []
     for char in text:
@@ -25,6 +26,7 @@ def _column_name(text: str) -> str:
         else:
             result.append("_")
     return "".join(result)
+
 
 def _validate_timezone(tz: str | None) -> str:
     if not tz or tz == "localtime":
@@ -57,6 +59,7 @@ def _validate_timezone(tz: str | None) -> str:
     except (ModuleNotFoundError, ValueError, KeyError) as e:
         raise InvalidTimezoneError(tz) from e
     raise InvalidTimezoneError(tz)
+
 
 def _select_parts_from_aggregation_fields(
     aggregation_fields: list[str],
@@ -92,43 +95,43 @@ def _select_parts_from_aggregation_fields(
 
     return select_parts
 
+
 class DatabaseManager:
     """Manages persistent database connections and operations."""
-    
+
     def __init__(self, db_path: str):
-        if not Path(db_path).exists():
-            self._create_database_if_not_exists(db_path)
-        self.conn: sqlite3.Connection = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn: sqlite3.Connection = self._create_database_if_not_exists(db_path)
         self.conn.row_factory = sqlite3.Row
         self._ensure_logs_table()
-    
-    def _ensure_logs_table(self):
+
+    def _ensure_logs_table(self) -> None:
         """Create logs table if it doesn't exist."""
         cursor = self.conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS logs (
                 ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 error TEXT,
                 message TEXT
             )
-        ''')
+        """,
+        )
         self.conn.commit()
-    
-    def log_error(self, error_name: str, message: str):
+
+    def log_error(self, error_name: str, message: str) -> None:
         """Log an error to the database."""
         cursor = self.conn.cursor()
         cursor.execute(
-            'INSERT INTO logs (error, message) VALUES (?, ?)',
-            (error_name, message)
+            "INSERT INTO logs (error, message) VALUES (?, ?)",
+            (error_name, message),
         )
         self.conn.commit()
-    
-    def close(self):
+
+    def close(self) -> None:
         """Close database connection."""
         self.conn.close()
 
-
-    def ensure_columns(
+    def _ensure_columns(
         self,
         required_columns: set[str],
         table_name: str = _DEFAULT_TABLE_NAME,
@@ -137,7 +140,6 @@ class DatabaseManager:
         If not, adds the missing columns with REAL type.
 
         Args:
-            conn (sqlite3.Connection): Connection to the SQLite database
             required_columns (set): Set of column names that should exist
             table_name (str): Name of the table to check/modify
 
@@ -153,13 +155,17 @@ class DatabaseManager:
         cursor = self.conn.cursor()
 
         cursor.execute(f"PRAGMA table_info({table_name})")
-        existing_columns = {row[1] for row in cursor.fetchall()}  # row[1] is column name
+        existing_columns = {
+            row[1] for row in cursor.fetchall()
+        }  # row[1] is column name
 
         missing_columns = required_columns - existing_columns
 
         for column_name in missing_columns:
             valid_column_name = _column_name(column_name)
-            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {valid_column_name} REAL")
+            cursor.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {valid_column_name} REAL",
+            )
             added_columns.append(column_name)
 
         cursor.close()
@@ -167,12 +173,11 @@ class DatabaseManager:
 
         return added_columns
 
-
     def _create_database_if_not_exists(
         self,
         db_path: str,
         table_name: str = _DEFAULT_TABLE_NAME,
-    ) -> bool:
+    ) -> sqlite3.Connection:
         """Check if a SQLite database exists at the specified path.
         If not, create the database and a table with the given name.
 
@@ -184,23 +189,19 @@ class DatabaseManager:
             bool: True if database was created, False if it already existed
 
         """
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
 
+        table_schema = f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                {_TS_COL} TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
 
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
+        cursor.execute(table_schema)
+        conn.commit()
 
-            table_schema = f"""
-                CREATE TABLE {table_name} (
-                    {_TS_COL} TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """
-
-            cursor.execute(table_schema)
-            conn.commit()
-
-            print(f"Database created with table '{table_name}' at: {db_path}")
-            return True
-
+        return conn
 
     def insert_dict_row(
         self,
@@ -210,15 +211,11 @@ class DatabaseManager:
         """Alternative version that takes an existing connection.
 
         Args:
-            conn (sqlite3.Connection): Existing database connection
             table_name (str): Name of the table to insert into
-            data_dict (dict): Dictionary where keys are column names and values are the data
+            data_dict (dict): Dictionary of keys as column names and values as data
 
         Returns:
             int: The rowid of the inserted row
-
-        Note:
-            This version does not automatically commit. Call conn.commit() if needed.
 
         """
         if not data_dict:
@@ -237,12 +234,10 @@ class DatabaseManager:
         self.conn.commit()
         return cursor.lastrowid
 
-
     def insert_observation(self, observation: dict[str, float | None]) -> None:
-        self.ensure_columns(set(observation.keys()))
+        """Insert an observation into the database."""
+        self._ensure_columns(set(observation.keys()))
         self.insert_dict_row(_DEFAULT_TABLE_NAME, observation)
-
-
 
     def query_daily_aggregated_data(
         self,
@@ -290,7 +285,6 @@ class DatabaseManager:
         cursor = self.conn.cursor()
         cursor.execute(query)
         return [dict(row) for row in cursor]
-
 
     def query_hourly_aggregated_data(
         self,
@@ -345,15 +339,16 @@ class DatabaseManager:
 
         return result
 
+
 # Global database manager instance
 db_manager: DatabaseManager | None = None
 
 
 def get_db_manager(db_path: str | None = None) -> DatabaseManager:
     """Get the global database manager instance."""
-    global db_manager
+    global db_manager  # noqa: PLW0603
     if db_manager is None:
         if db_path is None:
-            raise RuntimeError("Database manager not initialized")
+            raise DatabaseNotInitializedError
         db_manager = DatabaseManager(db_path)
     return db_manager
