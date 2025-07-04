@@ -1,9 +1,10 @@
 import json
-from pathlib import Path
+import logging
 import sys
 import time
 from datetime import datetime
 from http.client import HTTPException
+from pathlib import Path
 
 from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
@@ -35,9 +36,17 @@ def start_daemon(
     print("Press Ctrl+C to stop")
 
     log_path = Path(database_path).parent / f"{Path(database_path).stem}_daemon.log"
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler(log_path.__str__())],
+    )
+    logger = logging.getLogger(__name__)
+
     def log_message(message: str) -> None:
-        with log_path.open("a") as f:
-            f.write(f"[{datetime.now()}] {message}\n")
+        logger.info(message)
 
     labels: dict[str, str] = {}
     try:

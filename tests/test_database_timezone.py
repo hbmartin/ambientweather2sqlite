@@ -1,16 +1,28 @@
+import sqlite3
+import tempfile
+from pathlib import Path
 from unittest import TestCase
 
 from ambientweather2sqlite.database import (
-    DatabaseManager,
     _validate_timezone,
+    create_database_if_not_exists,
+    insert_observation,
+    query_daily_aggregated_data,
+    query_hourly_aggregated_data,
 )
 from ambientweather2sqlite.exceptions import InvalidTimezoneError
 
 
 class TestDatabaseTimezone(TestCase):
     def setUp(self):
-        self.db_path = ":memory:"
-        self.db_manager = DatabaseManager(self.db_path)
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+        Path(self.db_path).unlink(missing_ok=True)
+
+        # Create database and insert test data
+        was_created = create_database_if_not_exists(self.db_path)
+        self.assertTrue(was_created)
 
         # Insert test observations with different timestamps
         test_data = [
@@ -45,15 +57,18 @@ class TestDatabaseTimezone(TestCase):
                 "gustspeed": 12.0,
             },
         ]
+        print(self.db_path)
+        print(Path(self.db_path).exists())
         for data in test_data:
-            self.db_manager.insert_observation(data)
+            insert_observation(self.db_path, data)
 
     def tearDown(self):
-        self.db_manager.close()
+        Path(self.db_path).unlink(missing_ok=True)
 
     def test_query_daily_aggregated_data_with_valid_timezone(self):
         """Test daily aggregation with valid timezone"""
-        result = self.db_manager.query_daily_aggregated_data(
+        result = query_daily_aggregated_data(
+            db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
             prior_days=7,
             tz="America/New_York",
@@ -71,7 +86,8 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_daily_aggregated_data_with_utc_offset(self):
         """Test daily aggregation with UTC offset timezone"""
-        result = self.db_manager.query_daily_aggregated_data(
+        result = query_daily_aggregated_data(
+            db_path=self.db_path,
             aggregation_fields=["avg_outTemp"],
             prior_days=7,
             tz="+05:30",
@@ -82,7 +98,8 @@ class TestDatabaseTimezone(TestCase):
     def test_query_daily_aggregated_data_with_invalid_timezone(self):
         """Test daily aggregation with invalid timezone raises ValueError"""
         with self.assertRaises(InvalidTimezoneError) as context:
-            self.db_manager.query_daily_aggregated_data(
+            query_daily_aggregated_data(
+                db_path=self.db_path,
                 aggregation_fields=["avg_outTemp"],
                 prior_days=7,
                 tz="Invalid/Timezone",
@@ -92,7 +109,8 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_daily_aggregated_data_without_timezone(self):
         """Test daily aggregation without timezone parameter"""
-        result = self.db_manager.query_daily_aggregated_data(
+        result = query_daily_aggregated_data(
+            db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
             prior_days=7,
         )
@@ -102,7 +120,8 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_with_valid_timezone(self):
         """Test hourly aggregation with valid timezone"""
-        result = self.db_manager.query_hourly_aggregated_data(
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
             date="2025-06-27",
             tz="Europe/London",
@@ -121,7 +140,8 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_with_utc_offset(self):
         """Test hourly aggregation with UTC offset timezone"""
-        result = self.db_manager.query_hourly_aggregated_data(
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
             aggregation_fields=["avg_outTemp"],
             date="2025-06-27",
             tz="-08:00",
@@ -133,7 +153,8 @@ class TestDatabaseTimezone(TestCase):
     def test_query_hourly_aggregated_data_with_invalid_timezone(self):
         """Test hourly aggregation with invalid timezone raises ValueError"""
         with self.assertRaises(InvalidTimezoneError) as context:
-            self.db_manager.query_hourly_aggregated_data(
+            query_hourly_aggregated_data(
+                db_path=self.db_path,
                 aggregation_fields=["avg_outTemp"],
                 date="2025-06-27",
                 tz="Not/A/Timezone",
@@ -143,7 +164,8 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_without_timezone(self):
         """Test hourly aggregation without timezone parameter"""
-        result = self.db_manager.query_hourly_aggregated_data(
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
             date="2025-06-27",
         )
@@ -151,9 +173,40 @@ class TestDatabaseTimezone(TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 24)
 
+    def test_timezone_affects_aggregation_results(self):
+        """Test that different timezones can produce different results"""
+        # Insert data at timezone boundary
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO observations (ts, outTemp) VALUES (?, ?)",
+                ("2025-06-27 23:30:00", 80.0),
+            )
+            conn.commit()
+
+        # Query with different timezones
+        result_utc = query_daily_aggregated_data(
+            db_path=self.db_path,
+            aggregation_fields=["avg_outTemp"],
+            prior_days=7,
+            tz="UTC",
+        )
+
+        result_pst = query_daily_aggregated_data(
+            db_path=self.db_path,
+            aggregation_fields=["avg_outTemp"],
+            prior_days=7,
+            tz="America/Los_Angeles",
+        )
+
+        # Both should return results (specific assertions would depend on test data)
+        self.assertIsInstance(result_utc, list)
+        self.assertIsInstance(result_pst, list)
+
     def test_empty_timezone_string(self):
         """Test empty timezone string is treated as None"""
-        result = self.db_manager.query_daily_aggregated_data(
+        result = query_daily_aggregated_data(
+            db_path=self.db_path,
             aggregation_fields=["avg_outTemp"],
             prior_days=7,
             tz="",

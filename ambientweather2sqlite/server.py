@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -28,12 +29,27 @@ def create_request_handler(  # noqa: C901
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             message = format % args
-            with self.LOG_PATH.open("a") as f:
-                f.write(
-                    f"{self.address_string()} - - "
-                    f"[{self.log_date_time_string()}] "
-                    f"{message}\n",
+            # Configure logging for this handler if not already configured
+            if not hasattr(self, "_logger"):
+                self._logger = logging.getLogger(
+                    f"{__name__}.{self.__class__.__name__}",
                 )
+                # Prevent propagation to root logger to avoid console output
+                self._logger.propagate = False
+                handler = logging.FileHandler(self.LOG_PATH)
+                handler.setFormatter(
+                    logging.Formatter(
+                        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                    ),
+                )
+                self._logger.addHandler(handler)
+                self._logger.setLevel(logging.INFO)
+
+            self._logger.info(
+                f"{self.address_string()} - - "
+                f"[{self.log_date_time_string()}] "
+                f"{message}",
+            )
 
         def _set_headers(self, status: int = 200) -> None:
             """Set common headers for JSON responses."""
