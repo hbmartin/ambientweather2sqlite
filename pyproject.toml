@@ -52,7 +52,8 @@ lint.ignore = ["ANN204", "D100", "D101", "D103", "D104", "D107", "D203", "D205",
 "ambientweather2sqlite/configuration.py" = ["E501"]
 "ambientweather2sqlite/database.py" = ["S608", "SIM118"]
 "ambientweather2sqlite/mureq.py" = ["ANN003", "D105", "D203", "D205", "D213", "D401", "EM101", "ERA001", "FIX003", "TD001", "TD002", "TRY003"]
-"ambientweather2sqlite/server.py" = ["ANN201", "ANN202", "D102", "N802", "TRY003"]
+"ambientweather2sqlite/server.py" = ["ANN002", "ANN003", "ANN201", "ANN202", "D102", "G004", "N802", "TRY003"]
+"tests/*.py" = ["ANN001", "ANN201", "D102", "D400", "D415", "E501", "PLC0415", "PT009", "PT027", "SIM115", "TRY003"]
 
 [tool.ruff.format]
 # Same as Black.

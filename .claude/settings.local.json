@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_database_manager.py -v)",
+      "Bash(source:*)",
+      "Bash(uv run:*)"
+    ],
+    "deny": []
+  }
+}

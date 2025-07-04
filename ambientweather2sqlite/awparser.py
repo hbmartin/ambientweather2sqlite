@@ -19,7 +19,6 @@ class DisabledInputParser(HTMLParser):
                 value = attr_dict.get("value")
 
                 if name and value:
-                    # Exclude battery-related inputs
                     if "Batt" in name or "Time" in name or "ID" in name:
                         return
 

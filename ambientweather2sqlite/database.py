@@ -28,7 +28,75 @@ def _column_name(text: str) -> str:
     return "".join(result)
 
 
-def ensure_columns(
+def _validate_timezone(tz: str | None) -> str:
+    if not tz or tz == "localtime":
+        return "localtime"
+
+    try:
+        if ":" in tz:
+            hours, minutes = map(int, tz.split(":"))
+            offset_hours = (
+                hours + (minutes / 60) if hours >= 0 else hours - (minutes / 60)
+            )
+        else:
+            val = float(tz)
+            # Heuristic for (+-)HHMM format
+            if abs(val) > 24:  # noqa: PLR2004
+                sign = -1 if val < 0 else 1
+                abs_val = abs(val)
+                offset_hours = sign * (abs_val // 100 + (abs_val % 100) / 60)
+            else:
+                offset_hours = val
+    except ValueError:
+        pass
+    else:
+        return f"{offset_hours} hours"
+
+    try:
+        if (offset := ZoneInfo(tz).utcoffset(datetime.now())) is not None:
+            hours = offset.total_seconds() / 3600
+            return f"{hours} hours"
+    except (ModuleNotFoundError, ValueError, KeyError) as e:
+        raise InvalidTimezoneError(tz) from e
+    raise InvalidTimezoneError(tz)
+
+
+def _select_parts_from_aggregation_fields(
+    aggregation_fields: list[str],
+    datetime_expression: str,
+) -> list[str]:
+    parsed_fields = []
+
+    for field in aggregation_fields:
+        # Parse field like "avg_outHumi" into ("avg", "outHumi")
+        match = re.match(r"^(avg|max|min|sum)_(.+)$", field, re.IGNORECASE)
+        if not match:
+            raise InvalidFormatError(field)
+
+        agg_func, column_name = match.groups()
+
+        # Sanitize column name (basic SQL injection protection)
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", column_name):
+            raise InvalidColumnNameError(column_name)
+
+        parsed_fields.append((agg_func.upper(), column_name, field))
+
+    if not parsed_fields:
+        raise MissingAggregationFieldsError
+
+    select_parts = [datetime_expression]
+
+    select_parts.extend(
+        f"{agg_func}({column_name}) as {alias}"
+        for agg_func, column_name, alias in parsed_fields
+    )
+
+    select_parts.append("COUNT(*) as count")
+
+    return select_parts
+
+
+def _ensure_columns(
     conn: sqlite3.Connection,
     required_columns: set[str],
     table_name: str = _DEFAULT_TABLE_NAME,
@@ -97,12 +165,17 @@ def create_database_if_not_exists(
 
         cursor.execute(table_schema)
         conn.commit()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")  # 256MB
+        conn.commit()
 
         print(f"Database created with table '{table_name}' at: {db_path}")
         return True
 
 
-def insert_dict_row(
+def _insert_dict_row(
     conn: sqlite3.Connection,
     table_name: str,
     data_dict: dict[str, float | None],
@@ -116,9 +189,6 @@ def insert_dict_row(
 
     Returns:
         int: The rowid of the inserted row
-
-    Note:
-        This version does not automatically commit. Call conn.commit() if needed.
 
     """
     if not data_dict:
@@ -140,76 +210,8 @@ def insert_dict_row(
 
 def insert_observation(db_path: str, observation: dict[str, float | None]) -> None:
     with sqlite3.connect(db_path) as conn:
-        ensure_columns(conn, set(observation.keys()))
-        insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
-
-
-def _select_parts_from_aggregation_fields(
-    aggregation_fields: list[str],
-    datetime_expression: str,
-) -> list[str]:
-    parsed_fields = []
-
-    for field in aggregation_fields:
-        # Parse field like "avg_outHumi" into ("avg", "outHumi")
-        match = re.match(r"^(avg|max|min|sum)_(.+)$", field, re.IGNORECASE)
-        if not match:
-            raise InvalidFormatError(field)
-
-        agg_func, column_name = match.groups()
-
-        # Sanitize column name (basic SQL injection protection)
-        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", column_name):
-            raise InvalidColumnNameError(column_name)
-
-        parsed_fields.append((agg_func.upper(), column_name, field))
-
-    if not parsed_fields:
-        raise MissingAggregationFieldsError
-
-    select_parts = [datetime_expression]
-
-    select_parts.extend(
-        f"{agg_func}({column_name}) as {alias}"
-        for agg_func, column_name, alias in parsed_fields
-    )
-
-    select_parts.append("COUNT(*) as count")
-
-    return select_parts
-
-
-def _validate_timezone(tz: str | None) -> str:
-    if not tz or tz == "localtime":
-        return "localtime"
-
-    try:
-        if ":" in tz:
-            hours, minutes = map(int, tz.split(":"))
-            offset_hours = (
-                hours + (minutes / 60) if hours >= 0 else hours - (minutes / 60)
-            )
-        else:
-            val = float(tz)
-            # Heuristic for (+-)HHMM format
-            if abs(val) > 24:  # noqa: PLR2004
-                sign = -1 if val < 0 else 1
-                abs_val = abs(val)
-                offset_hours = sign * (abs_val // 100 + (abs_val % 100) / 60)
-            else:
-                offset_hours = val
-    except ValueError:
-        pass
-    else:
-        return f"{offset_hours} hours"
-
-    try:
-        if (offset := ZoneInfo(tz).utcoffset(datetime.now())) is not None:
-            hours = offset.total_seconds() / 3600
-            return f"{hours} hours"
-    except (ModuleNotFoundError, ValueError, KeyError) as e:
-        raise InvalidTimezoneError(tz) from e
-    raise InvalidTimezoneError(tz)
+        _ensure_columns(conn, set(observation.keys()))
+        _insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
 
 
 def query_daily_aggregated_data(

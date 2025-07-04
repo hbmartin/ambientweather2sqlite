@@ -1,6 +1,8 @@
 import json
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneError
@@ -23,10 +25,33 @@ def create_request_handler(  # noqa: C901
     class JSONHandler(BaseHTTPRequestHandler):
         LIVE_DATA_URL = live_data_url
         DB_PATH = db_path
+        LOG_PATH = Path(db_path).parent / f"{Path(db_path).stem}_server.log"
+        _logger: logging.Logger = logging.getLogger(f"{__name__}.JSONHandler")
+
+        @classmethod
+        def _setup_logger(cls) -> None:
+            # Prevent propagation to root logger to avoid console output
+            cls._logger.propagate = False
+            handler = logging.FileHandler(cls.LOG_PATH)
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                ),
+            )
+            cls._logger.addHandler(handler)
+            cls._logger.setLevel(logging.INFO)
+
+        def __init__(self, *args, **kwargs):
+            self._setup_logger()
+            super().__init__(*args, **kwargs)
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            # Override to disable all logging
-            pass
+            message = format % args
+            self._logger.info(
+                f"{self.address_string()} - - "
+                f"[{self.log_date_time_string()}] "
+                f"{message}",
+            )
 
         def _set_headers(self, status: int = 200) -> None:
             """Set common headers for JSON responses."""
@@ -42,13 +67,13 @@ def create_request_handler(  # noqa: C901
                 json_string = json.dumps(data, indent=2)
                 self.wfile.write(json_string.encode("utf-8"))
             except BrokenPipeError:
-                # Client disconnected before response was sent
-                pass
+                self.log_message("%s", "BrokenPipeError")
 
         def _send_live_data(self) -> None:
             try:
                 body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
             except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 500)
                 return
             values = extract_values(body)
@@ -72,7 +97,12 @@ def create_request_handler(  # noqa: C901
                 if len(prior_days_query) != 0:
                     try:
                         prior_days = int(prior_days_query[0])
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
+                        self.log_message(
+                            "%s\n%s",
+                            type(e).__name__,
+                            f"days must be int, got {prior_days_query[0]}",
+                        )
                         self._send_json(
                             {
                                 "error": f"days must be int, got {prior_days_query[0]}",
@@ -89,8 +119,10 @@ def create_request_handler(  # noqa: C901
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 500)
 
         def _send_hourly_aggregated_data(self) -> None:
@@ -115,8 +147,10 @@ def create_request_handler(  # noqa: C901
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 500)
 
         def do_GET(self):
