@@ -26,25 +26,27 @@ def create_request_handler(  # noqa: C901
         LIVE_DATA_URL = live_data_url
         DB_PATH = db_path
         LOG_PATH = Path(db_path).parent / f"{Path(db_path).stem}_server.log"
+        _logger: logging.Logger = logging.getLogger(f"{__name__}.JSONHandler")
+
+        @classmethod
+        def _setup_logger(cls) -> None:
+            # Prevent propagation to root logger to avoid console output
+            cls._logger.propagate = False
+            handler = logging.FileHandler(cls.LOG_PATH)
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                ),
+            )
+            cls._logger.addHandler(handler)
+            cls._logger.setLevel(logging.INFO)
+
+        def __init__(self, *args, **kwargs):
+            self._setup_logger()
+            super().__init__(*args, **kwargs)
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             message = format % args
-            # Configure logging for this handler if not already configured
-            if not hasattr(self, "_logger"):
-                self._logger = logging.getLogger(
-                    f"{__name__}.{self.__class__.__name__}",
-                )
-                # Prevent propagation to root logger to avoid console output
-                self._logger.propagate = False
-                handler = logging.FileHandler(self.LOG_PATH)
-                handler.setFormatter(
-                    logging.Formatter(
-                        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                    ),
-                )
-                self._logger.addHandler(handler)
-                self._logger.setLevel(logging.INFO)
-
             self._logger.info(
                 f"{self.address_string()} - - "
                 f"[{self.log_date_time_string()}] "

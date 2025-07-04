@@ -50,7 +50,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='observations'"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='observations'",
             )
             result = cursor.fetchone()
             self.assertIsNotNone(result)
