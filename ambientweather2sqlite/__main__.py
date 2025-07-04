@@ -2,11 +2,9 @@ import sys
 import tomllib
 from typing import TYPE_CHECKING
 
-from ambientweather2sqlite.database import get_db_manager
-from ambientweather2sqlite.metadata import create_metadata
-
 from .configuration import create_config_file, get_config_path
 from .daemon import start_daemon
+from .database import create_database_if_not_exists
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -40,11 +38,10 @@ def main() -> None:
         default_config_path = get_str_argument(args) or default_config_path
     config_path = create_config_file(default_config_path)
     config = tomllib.loads(config_path.read_text())
-    labels, _ = create_metadata(config["database_path"], config["live_data_url"])
+    create_database_if_not_exists(config["database_path"])
     start_daemon(
         live_data_url=config["live_data_url"],
-        database=get_db_manager(config["database_path"]),
-        labels=labels,
+        database_path=config["database_path"],
         port=port or config.get("port"),
     )
 

@@ -1,13 +1,14 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneError
 
 from . import mureq
 from .awparser import extract_labels, extract_values
-from .database import DatabaseManager
+from .database import query_daily_aggregated_data, query_hourly_aggregated_data
 
 
 def _tz_from_query(query: dict) -> str:
@@ -18,15 +19,21 @@ def _tz_from_query(query: dict) -> str:
 
 def create_request_handler(  # noqa: C901
     live_data_url: str,
-    database: DatabaseManager,
+    db_path: str,
 ) -> type[BaseHTTPRequestHandler]:
     class JSONHandler(BaseHTTPRequestHandler):
         LIVE_DATA_URL = live_data_url
-        DATABASE = database
+        DB_PATH = db_path
+        LOG_PATH = Path(db_path).parent / f"{Path(db_path).stem}_server.log"
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            # Override to disable all logging
-            pass
+            message = format % args
+            with self.LOG_PATH.open("a") as f:
+                f.write(
+                    f"{self.address_string()} - - "
+                    f"[{self.log_date_time_string()}] "
+                    f"{message}\n",
+                )
 
         def _set_headers(self, status: int = 200) -> None:
             """Set common headers for JSON responses."""
@@ -42,16 +49,13 @@ def create_request_handler(  # noqa: C901
                 json_string = json.dumps(data, indent=2)
                 self.wfile.write(json_string.encode("utf-8"))
             except BrokenPipeError:
-                self.DATABASE.log_error(
-                    "BrokenPipeError",
-                    "Client disconnected before response was sent",
-                )
+                self.log_message("%s", "BrokenPipeError")
 
         def _send_live_data(self) -> None:
             try:
                 body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
             except Exception as e:  # noqa: BLE001
-                self.DATABASE.log_error(type(e).__name__, str(e))
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 500)
                 return
             values = extract_values(body)
@@ -75,7 +79,12 @@ def create_request_handler(  # noqa: C901
                 if len(prior_days_query) != 0:
                     try:
                         prior_days = int(prior_days_query[0])
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
+                        self.log_message(
+                            "%s\n%s",
+                            type(e).__name__,
+                            f"days must be int, got {prior_days_query[0]}",
+                        )
                         self._send_json(
                             {
                                 "error": f"days must be int, got {prior_days_query[0]}",
@@ -84,17 +93,18 @@ def create_request_handler(  # noqa: C901
                         )
                         return
 
-                data = self.DATABASE.query_daily_aggregated_data(
+                data = query_daily_aggregated_data(
+                    db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
                     prior_days=prior_days,
                     tz=_tz_from_query(query),
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
-                self.DATABASE.log_error(type(e).__name__, str(e))
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
-                self.DATABASE.log_error(type(e).__name__, str(e))
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 500)
 
         def _send_hourly_aggregated_data(self) -> None:
@@ -111,17 +121,18 @@ def create_request_handler(  # noqa: C901
                     )
                     return
 
-                data = self.DATABASE.query_hourly_aggregated_data(
+                data = query_hourly_aggregated_data(
+                    db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
                     date=date[0],
                     tz=_tz_from_query(query),
                 )
                 self._send_json({"data": data})
             except Aw2SqliteError as e:
-                self.DATABASE.log_error(type(e).__name__, str(e))
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
-                self.DATABASE.log_error(type(e).__name__, str(e))
+                self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 500)
 
         def do_GET(self):
@@ -140,16 +151,10 @@ def create_request_handler(  # noqa: C901
 
 
 class Server:
-    def __init__(
-        self,
-        live_data_url: str,
-        database: DatabaseManager,
-        port: int,
-        host: str,
-    ):
+    def __init__(self, live_data_url: str, db_path: str, port: int, host: str):
         self.httpd = HTTPServer(
             (host, port),
-            create_request_handler(live_data_url, database),
+            create_request_handler(live_data_url, db_path),
         )
         self.server_thread = threading.Thread(
             target=self.httpd.serve_forever,
