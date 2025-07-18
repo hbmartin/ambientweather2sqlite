@@ -1,15 +1,26 @@
 import json
 import logging
+import sys
 import threading
+import tomllib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneError
 
 from . import mureq
 from .awparser import extract_labels, extract_values
-from .database import query_daily_aggregated_data, query_hourly_aggregated_data
+from .configuration import create_config_file, get_config_path
+from .database import (
+    create_database_if_not_exists,
+    query_daily_aggregated_data,
+    query_hourly_aggregated_data,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _tz_from_query(query: dict) -> str:
@@ -189,3 +200,58 @@ class Server:
         self.httpd.shutdown()
         self.httpd.server_close()
         self.server_thread.join()
+
+
+def get_int_argument(args: list[str]) -> int | None:
+    for arg in args:
+        try:
+            return int(arg)
+        except ValueError:
+            pass
+    return None
+
+
+def get_str_argument(args: list[str]) -> str | None:
+    """Find the first non-numerical argument in the list and return it as string."""
+    for arg in args:
+        try:
+            int(arg)
+        except ValueError:
+            return arg
+    return None
+
+
+def main() -> None:
+    default_config_path: str | Path | None = get_config_path()
+    port: int | None = None
+    if len(sys.argv) > 1:
+        args = sys.argv[1:]
+        port = get_int_argument(args)
+        default_config_path = get_str_argument(args) or default_config_path
+    config_path = create_config_file(default_config_path)
+    config = tomllib.loads(config_path.read_text())
+    create_database_if_not_exists(config["database_path"])
+
+    host = "localhost"
+    server_port = port or config.get("port")
+    if server_port is None:
+        print("Error: No port specified in config or command line")
+        sys.exit(1)
+
+    print(f"Starting JSON server on http://{host}:{server_port}")
+    server = Server(config["live_data_url"], config["database_path"], server_port, host)
+    server.start()
+
+    try:
+        print("Server running. Press Ctrl+C to stop")
+        while True:
+            server.server_thread.join(timeout=1)
+            if not server.server_thread.is_alive():
+                break
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()
