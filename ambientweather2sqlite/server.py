@@ -129,11 +129,13 @@ def create_request_handler(  # noqa: C901
             try:
                 query = parse_qs(urlparse(self.path).query)
                 aggregation_fields = query.get("q", [])
-                date = query.get("date", [])
-                if not date:
+                start_date = query.get("start_date", [])
+                end_date = query.get("end_date", [])
+
+                if not start_date:
                     self._send_json(
                         {
-                            "error": "date is required e.g. /hourly?date=2025-06-22",
+                            "error": "start_date is required e.g. /hourly?start_date=2025-06-22",
                         },
                         400,
                     )
@@ -142,7 +144,8 @@ def create_request_handler(  # noqa: C901
                 data = query_hourly_aggregated_data(
                     db_path=self.DB_PATH,
                     aggregation_fields=aggregation_fields,
-                    date=date[0],
+                    start_date=start_date[0],
+                    end_date=end_date[0] if end_date else None,
                     tz=_tz_from_query(query),
                 )
                 self._send_json({"data": data})

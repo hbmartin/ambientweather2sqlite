@@ -41,7 +41,7 @@ def start_daemon(
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler(log_path.__str__())],
+        handlers=[logging.FileHandler(str(log_path))],
     )
     logger = logging.getLogger(__name__)
 
