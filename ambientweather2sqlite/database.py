@@ -316,7 +316,6 @@ def query_hourly_aggregated_data(
     GROUP BY {group_by_expr}
     ORDER BY date, hour
     """
-    print(query)
 
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row

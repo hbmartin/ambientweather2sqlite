@@ -61,8 +61,7 @@ class TestDatabaseTimezone(TestCase):
                 "gustspeed": 12.0,
             },
         ]
-        print(self.db_path)
-        print(Path(self.db_path).exists())
+
         for data in test_data:
             insert_observation(self.db_path, data)
 
