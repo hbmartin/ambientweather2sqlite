@@ -266,54 +266,68 @@ def query_daily_aggregated_data(
 def query_hourly_aggregated_data(
     db_path: str,
     aggregation_fields: list[str],
-    date: str,
+    start_date: str,
+    end_date: str | None = None,
     tz: str | None = None,
-) -> list[dict[str, float | int | str] | None]:
-    """Query SQLite database with dynamic aggregation fields.
+) -> dict[str, list[dict[str, float | int | str]]]:
+    """Query SQLite database with dynamic aggregation fields for date range.
 
     Args:
         db_path: Path to SQLite database file
         aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
-        date: Date to query (YYYY-MM-DD)
+        start_date: Start date to query (YYYY-MM-DD)
+        end_date: End date to query (YYYY-MM-DD), defaults to today if None
         tz: Timezone string (e.g., 'America/New_York', '+05:30')
 
     Returns:
-        Sorted list of dicts of aggregates or None for each hour
+        List of dicts containing date, hour, and aggregated values
 
     """
     table_name: str = _DEFAULT_TABLE_NAME
     date_column: str = _TS_COL
 
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
-        raise InvalidDateError(date)
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", start_date):
+        raise InvalidDateError(start_date)
+
+    if end_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", end_date):
+        raise InvalidDateError(end_date)
 
     timezone = _validate_timezone(tz)
 
-    datetime_expression = f"strftime('%H', {date_column}, '{timezone}') as hour"
+    datetime_expression = f"DATE({date_column}, '{timezone}') as date"
+    hour_expression = f"strftime('%H', {date_column}, '{timezone}') as hour"
     date_filter_expr = f"DATE({date_column}, '{timezone}')"
     group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{timezone}')"
 
     select_parts = _select_parts_from_aggregation_fields(
         aggregation_fields=aggregation_fields,
-        datetime_expression=datetime_expression,
+        datetime_expression=datetime_expression + ", " + hour_expression,
     )
+
+    where_clause = f"WHERE {date_filter_expr} >= '{start_date}'"
+    if end_date:
+        where_clause += f" AND {date_filter_expr} <= '{end_date}'"
 
     query = f"""
     SELECT
         {','.join(select_parts)}
     FROM {table_name}
-    WHERE {date_filter_expr} = '{date}'
+    {where_clause}
     GROUP BY {group_by_expr}
-    ORDER BY hour
+    ORDER BY date, hour
     """
 
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-        # Enable row factory to get column names
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor().execute(query)
-
-        result: list[dict[str, float | int | str] | None] = [None for _ in range(24)]
+        result = {}
         for row in cursor:
-            result[int(row["hour"])] = dict(row)
+            row_dict = dict(row)
+            date = row_dict.get("date")
+            if date not in result:
+                result[date] = [None] * 24
 
+            hour = row_dict.get("hour")
+            if hour is not None:
+                result[date][int(hour)] = row_dict
         return result

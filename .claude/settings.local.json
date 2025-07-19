@@ -1,10 +1,24 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(python -m pytest tests/test_database_manager.py -v)",
-      "Bash(source:*)",
-      "Bash(uv run:*)"
-    ],
-    "deny": []
-  }
+	"permissions": {
+		"allow": [
+			"Bash(python -m pytest tests/test_database_manager.py -v)",
+			"Bash(source:*)",
+			"Bash(uv run:*)",
+			"Bash(python -m pytest tests/test_server.py -v)",
+			"Bash(python -m pytest tests/test_server.py::TestServer::test_server_integration_hourly_data -v -s)"
+		],
+		"deny": []
+	},
+	"hooks": {
+		"Stop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "uv run black ."
+					}
+				]
+			}
+		]
+	}
 }

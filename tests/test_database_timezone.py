@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
 
@@ -24,41 +25,43 @@ class TestDatabaseTimezone(TestCase):
         was_created = create_database_if_not_exists(self.db_path)
         self.assertTrue(was_created)
 
-        # Insert test observations with different timestamps
+        # Insert test observations with relative timestamps (never stale)
+        today = datetime.now().date()
+        yesterday = today - timedelta(days=1)
+
         test_data = [
             {
-                "ts": "2025-06-27 12:00:00",
+                "ts": f"{today} 12:00:00",
                 "outTemp": 75.0,
                 "outHumi": 60.0,
                 "gustspeed": 10.0,
             },
             {
-                "ts": "2025-06-27 13:00:00",
+                "ts": f"{today} 13:00:00",
                 "outTemp": 77.0,
                 "outHumi": 58.0,
                 "gustspeed": 15.0,
             },
             {
-                "ts": "2025-06-27 14:00:00",
+                "ts": f"{today} 14:00:00",
                 "outTemp": 79.0,
                 "outHumi": 55.0,
                 "gustspeed": 20.0,
             },
             {
-                "ts": "2025-06-26 12:00:00",
+                "ts": f"{yesterday} 12:00:00",
                 "outTemp": 72.0,
                 "outHumi": 65.0,
                 "gustspeed": 8.0,
             },
             {
-                "ts": "2025-06-26 13:00:00",
+                "ts": f"{yesterday} 13:00:00",
                 "outTemp": 74.0,
                 "outHumi": 62.0,
                 "gustspeed": 12.0,
             },
         ]
-        print(self.db_path)
-        print(Path(self.db_path).exists())
+
         for data in test_data:
             insert_observation(self.db_path, data)
 
@@ -120,18 +123,23 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_with_valid_timezone(self):
         """Test hourly aggregation with valid timezone"""
+        today = datetime.now().date()
+        today_str = str(today)
+
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
-            date="2025-06-27",
+            start_date=today_str,
             tz="Europe/London",
         )
 
-        self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 24)  # 24 hours
+        self.assertIsInstance(result, dict)
+        self.assertIn(today_str, result)
+        date_data = result[today_str]
+        self.assertEqual(len(date_data), 24)  # 24 hours
 
         # Check that non-null entries have expected fields
-        for hour_data in result:
+        for hour_data in date_data:
             if hour_data is not None:
                 self.assertIn("hour", hour_data)
                 self.assertIn("avg_outTemp", hour_data)
@@ -140,23 +148,30 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_with_utc_offset(self):
         """Test hourly aggregation with UTC offset timezone"""
+        today = datetime.now().date()
+        today_str = str(today)
+
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
             aggregation_fields=["avg_outTemp"],
-            date="2025-06-27",
+            start_date=today_str,
             tz="-08:00",
         )
 
-        self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 24)
+        self.assertIsInstance(result, dict)
+        self.assertIn(today_str, result)
+        self.assertEqual(len(result[today_str]), 24)
 
     def test_query_hourly_aggregated_data_with_invalid_timezone(self):
         """Test hourly aggregation with invalid timezone raises ValueError"""
+        today = datetime.now().date()
+        today_str = str(today)
+
         with self.assertRaises(InvalidTimezoneError) as context:
             query_hourly_aggregated_data(
                 db_path=self.db_path,
                 aggregation_fields=["avg_outTemp"],
-                date="2025-06-27",
+                start_date=today_str,
                 tz="Not/A/Timezone",
             )
 
@@ -164,23 +179,30 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_without_timezone(self):
         """Test hourly aggregation without timezone parameter"""
+        today = datetime.now().date()
+        today_str = str(today)
+
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
-            date="2025-06-27",
+            start_date=today_str,
         )
 
-        self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 24)
+        self.assertIsInstance(result, dict)
+        self.assertIn(today_str, result)
+        self.assertEqual(len(result[today_str]), 24)
 
     def test_timezone_affects_aggregation_results(self):
         """Test that different timezones can produce different results"""
         # Insert data at timezone boundary
+        today = datetime.now().date()
+        boundary_time = f"{today} 23:30:00"
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO observations (ts, outTemp) VALUES (?, ?)",
-                ("2025-06-27 23:30:00", 80.0),
+                (boundary_time, 80.0),
             )
             conn.commit()
 

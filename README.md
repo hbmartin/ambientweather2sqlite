@@ -16,7 +16,6 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 * Dynamic Schema Management: Automatic database schema evolution as new sensors are detected
 * HTTP JSON API: Optional web server providing live data access, Includes hourly and daily aggregation endpoints.
 * Interactive Configuration: Command-line setup wizard for initial configuration
-* Cross-Platform Distribution: Available via PyPI with pipx installation
 * Zero Dependencies: Pure Python with no (potentially) untrusted 3rd parties.
 
 ## Installation

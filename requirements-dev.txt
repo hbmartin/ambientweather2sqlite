@@ -20,11 +20,11 @@ pluggy==1.6.0
     # via pytest
 pygments==2.19.2
     # via pytest
-pyrefly==0.22.1
+pyrefly==0.24.2
     # via ambientweather2sqlite (pyproject.toml:dev)
 pytest==8.4.1
     # via ambientweather2sqlite (pyproject.toml:dev)
-ruff==0.12.2
+ruff==0.12.4
     # via ambientweather2sqlite (pyproject.toml:dev)
-ty==0.0.1a13
+ty==0.0.1a15
     # via ambientweather2sqlite (pyproject.toml:dev)
