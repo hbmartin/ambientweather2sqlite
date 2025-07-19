@@ -135,7 +135,7 @@ def create_request_handler(  # noqa: C901
                 if not start_date:
                     self._send_json(
                         {
-                            "error": "start_date is required e.g. /hourly?start_date=2025-06-22",
+                            "error": "start_date required e.g. /hourly?start_date=2025-06-22",  # noqa: E501
                         },
                         400,
                     )

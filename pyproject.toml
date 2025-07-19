@@ -1,6 +1,6 @@
 [project]
 name = "ambientweather2sqlite"
-version = "0.6.1"
+version = "0.7.0"
 description = "A project to record weather observations from an AmbientWeather station over the local network - no API needed!"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -29,9 +29,9 @@ ambientweather2sqlite = "ambientweather2sqlite.__main__:main"
 [dependency-groups]
 dev = [
     "black>=25.1.0",
-    "pyrefly>=0.19.2",
+    "pyrefly>=0.24.2",
     "pytest>=8.0.0",
-    "ruff>=0.11.13",
+    "ruff>=0.12.4",
     "ty>=0.0.1a10",
 ]
 

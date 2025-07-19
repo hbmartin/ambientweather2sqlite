@@ -269,7 +269,7 @@ def query_hourly_aggregated_data(
     start_date: str,
     end_date: str | None = None,
     tz: str | None = None,
-) -> list[dict[str, float | int | str]]:
+) -> dict[str, list[dict[str, float | int | str]]]:
     """Query SQLite database with dynamic aggregation fields for date range.
 
     Args:
@@ -301,17 +301,12 @@ def query_hourly_aggregated_data(
 
     select_parts = _select_parts_from_aggregation_fields(
         aggregation_fields=aggregation_fields,
-        datetime_expression=datetime_expression,
+        datetime_expression=datetime_expression + ", " + hour_expression,
     )
 
-    # Insert hour after date
-    select_parts.insert(1, hour_expression)
-
-    # Build WHERE clause for date range
+    where_clause = f"WHERE {date_filter_expr} >= '{start_date}'"
     if end_date:
-        where_clause = f"WHERE {date_filter_expr} >= '{start_date}' AND {date_filter_expr} <= '{end_date}'"
-    else:
-        where_clause = f"WHERE {date_filter_expr} >= '{start_date}' AND {date_filter_expr} <= DATE('now', '{timezone}')"
+        where_clause += f" AND {date_filter_expr} <= '{end_date}'"
 
     query = f"""
     SELECT
@@ -321,8 +316,19 @@ def query_hourly_aggregated_data(
     GROUP BY {group_by_expr}
     ORDER BY date, hour
     """
+    print(query)
 
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor().execute(query)
-        return [dict(row) for row in cursor]
+        result = {}
+        for row in cursor:
+            row_dict = dict(row)
+            date = row_dict.get("date")
+            if date not in result:
+                result[date] = [None] * 24
+
+            hour = row_dict.get("hour")
+            if hour is not None:
+                result[date][int(hour)] = row_dict
+        return result
