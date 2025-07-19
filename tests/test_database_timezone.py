@@ -28,7 +28,7 @@ class TestDatabaseTimezone(TestCase):
         # Insert test observations with relative timestamps (never stale)
         today = datetime.now().date()
         yesterday = today - timedelta(days=1)
-        
+
         test_data = [
             {
                 "ts": f"{today} 12:00:00",
@@ -126,7 +126,7 @@ class TestDatabaseTimezone(TestCase):
         """Test hourly aggregation with valid timezone"""
         today = datetime.now().date()
         today_str = str(today)
-        
+
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
@@ -151,7 +151,7 @@ class TestDatabaseTimezone(TestCase):
         """Test hourly aggregation with UTC offset timezone"""
         today = datetime.now().date()
         today_str = str(today)
-        
+
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
             aggregation_fields=["avg_outTemp"],
@@ -167,7 +167,7 @@ class TestDatabaseTimezone(TestCase):
         """Test hourly aggregation with invalid timezone raises ValueError"""
         today = datetime.now().date()
         today_str = str(today)
-        
+
         with self.assertRaises(InvalidTimezoneError) as context:
             query_hourly_aggregated_data(
                 db_path=self.db_path,
@@ -182,7 +182,7 @@ class TestDatabaseTimezone(TestCase):
         """Test hourly aggregation without timezone parameter"""
         today = datetime.now().date()
         today_str = str(today)
-        
+
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
             aggregation_fields=["avg_outTemp", "max_gustspeed"],
@@ -198,7 +198,7 @@ class TestDatabaseTimezone(TestCase):
         # Insert data at timezone boundary
         today = datetime.now().date()
         boundary_time = f"{today} 23:30:00"
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
