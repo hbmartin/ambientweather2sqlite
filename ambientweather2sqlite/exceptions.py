@@ -41,3 +41,10 @@ class MissingAggregationFieldsError(Aw2SqliteError):
 class UnexpectedEmptyDictionaryError(Aw2SqliteError):
     def __init__(self):
         super().__init__("Dictionary is unexpectedly empty")
+
+
+class ForecastCooldownError(Aw2SqliteError):
+    def __init__(self, last_fetch: str):
+        super().__init__(
+            f"Forecast already fetched at {last_fetch}. Use --force to override.",
+        )

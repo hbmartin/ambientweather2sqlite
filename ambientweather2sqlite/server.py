@@ -1,5 +1,6 @@
 import json
 import logging
+import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -9,7 +10,10 @@ from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneErro
 
 from . import mureq
 from .awparser import extract_labels, extract_values
-from .database import query_daily_aggregated_data, query_hourly_aggregated_data
+from .database import (
+    query_daily_aggregated_data,
+    query_hourly_aggregated_data,
+)
 
 
 def _tz_from_query(query: dict) -> str:
@@ -156,6 +160,89 @@ def create_request_handler(  # noqa: C901
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json({"error": str(e)}, 500)
 
+        def _send_forecast_data(self) -> None:
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                batch_id_param = query.get("batch_id", [])
+                batch_id = int(batch_id_param[0]) if batch_id_param else None
+
+                with sqlite3.connect(
+                    f"file:{self.DB_PATH}?mode=ro",
+                    uri=True,
+                ) as conn:
+                    conn.row_factory = sqlite3.Row
+                    if batch_id is None:
+                        batch_row = conn.execute(
+                            "SELECT * FROM forecast_batches ORDER BY id DESC LIMIT 1",
+                        ).fetchone()
+                    else:
+                        batch_row = conn.execute(
+                            "SELECT * FROM forecast_batches WHERE id = ?",
+                            (batch_id,),
+                        ).fetchone()
+
+                    if not batch_row:
+                        self._send_json({"error": "No forecast data found"}, 404)
+                        return
+
+                    bid = batch_row["id"]
+                    batch_info = dict(batch_row)
+
+                    hourly_rows = conn.execute(
+                        "SELECT * FROM forecast_hourly"
+                        " WHERE batch_id = ?"
+                        " ORDER BY provider, forecast_time",
+                        (bid,),
+                    ).fetchall()
+
+                    daily_rows = conn.execute(
+                        "SELECT * FROM forecast_daily"
+                        " WHERE batch_id = ?"
+                        " ORDER BY provider, forecast_date",
+                        (bid,),
+                    ).fetchall()
+
+                hourly: dict = {}
+                for row in hourly_rows:
+                    d = dict(row)
+                    provider = d.pop("provider")
+                    d.pop("batch_id")
+                    hourly.setdefault(provider, []).append(d)
+
+                daily: dict = {}
+                for row in daily_rows:
+                    d = dict(row)
+                    provider = d.pop("provider")
+                    d.pop("batch_id")
+                    daily.setdefault(provider, []).append(d)
+
+                self._send_json(
+                    {
+                        "batch": batch_info,
+                        "hourly": hourly,
+                        "daily": daily,
+                    },
+                )
+            except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
+                self._send_json({"error": str(e)}, 500)
+
+        def _send_forecast_batches(self) -> None:
+            try:
+                with sqlite3.connect(
+                    f"file:{self.DB_PATH}?mode=ro",
+                    uri=True,
+                ) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        "SELECT id, fetched_at, location_name"
+                        " FROM forecast_batches ORDER BY id DESC",
+                    ).fetchall()
+                self._send_json({"batches": [dict(r) for r in rows]})
+            except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
+                self._send_json({"error": str(e)}, 500)
+
         def do_GET(self):
             # Only serve data for the root path
             if self.path == "/":
@@ -164,6 +251,10 @@ def create_request_handler(  # noqa: C901
                 self._send_daily_aggregated_data()
             elif self.path.startswith("/hourly"):
                 self._send_hourly_aggregated_data()
+            elif self.path.startswith("/forecast/batches"):
+                self._send_forecast_batches()
+            elif self.path.startswith("/forecast"):
+                self._send_forecast_data()
             else:
                 self._send_json({"error": "Not found"}, 404)
                 return

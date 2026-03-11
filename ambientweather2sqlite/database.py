@@ -175,6 +175,68 @@ def create_database_if_not_exists(
         return True
 
 
+def ensure_forecast_tables(db_path: str) -> None:
+    """Create forecast tables if they don't exist."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS forecast_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                location_name TEXT,
+                lat REAL,
+                lon REAL,
+                country TEXT,
+                timezone TEXT
+            )
+        """,
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS forecast_hourly (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                forecast_time TEXT NOT NULL,
+                timestamp_ms INTEGER,
+                temperature REAL,
+                feels_like REAL,
+                humidity REAL,
+                wind_speed REAL,
+                precipitation REAL,
+                precipitation_probability REAL,
+                cloud_cover REAL,
+                condition TEXT,
+                icon TEXT,
+                pressure REAL,
+                FOREIGN KEY (batch_id) REFERENCES forecast_batches(id)
+            )
+        """,
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS forecast_daily (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                forecast_date TEXT NOT NULL,
+                high REAL,
+                low REAL,
+                humidity REAL,
+                wind_speed REAL,
+                precipitation REAL,
+                precipitation_probability REAL,
+                condition TEXT,
+                icon TEXT,
+                sunrise TEXT,
+                sunset TEXT,
+                FOREIGN KEY (batch_id) REFERENCES forecast_batches(id)
+            )
+        """,
+        )
+        conn.commit()
+
+
 def _insert_dict_row(
     conn: sqlite3.Connection,
     table_name: str,

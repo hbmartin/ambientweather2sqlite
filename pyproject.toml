@@ -29,6 +29,8 @@ ambientweather2sqlite = "ambientweather2sqlite.__main__:main"
 [dependency-groups]
 dev = [
     "black>=25.1.0",
+    "codecov>=2.1.13",
+    "lizard>=1.21.2",
     "pyrefly>=0.24.2",
     "pytest>=8.0.0",
     "ruff>=0.12.4",
