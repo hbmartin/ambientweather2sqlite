@@ -54,7 +54,7 @@ def request(
     *,
     read_limit: int | None = None,
     **kwargs,
-) -> "Response":
+) -> Response:
     """Request performs an HTTP request and reads the entire response body.
 
     :param str method: HTTP method to request (e.g. 'GET', 'POST')
@@ -94,7 +94,7 @@ def get(url: str, *, auto_retry: bool = False, **kwargs) -> str:
         raise
 
 
-def post(url: str, body: bytes | None = None, **kwargs) -> "Response":
+def post(url: str, body: bytes | None = None, **kwargs) -> Response:
     """Performs an HTTP POST request.
 
     See yield_response for kwargs.
@@ -102,7 +102,7 @@ def post(url: str, body: bytes | None = None, **kwargs) -> "Response":
     return request("POST", url=url, body=body, **kwargs)
 
 
-def head(url: str, **kwargs) -> "Response":
+def head(url: str, **kwargs) -> Response:
     """Performs an HTTP HEAD request.
 
     See yield_response for kwargs.
@@ -110,7 +110,7 @@ def head(url: str, **kwargs) -> "Response":
     return request("HEAD", url=url, **kwargs)
 
 
-def put(url: str, body: bytes | None = None, **kwargs) -> "Response":
+def put(url: str, body: bytes | None = None, **kwargs) -> Response:
     """Performs an HTTP PUT request.
 
     See yield_response for kwargs.
@@ -118,7 +118,7 @@ def put(url: str, body: bytes | None = None, **kwargs) -> "Response":
     return request("PUT", url=url, body=body, **kwargs)
 
 
-def patch(url: str, body: bytes | None = None, **kwargs) -> "Response":
+def patch(url: str, body: bytes | None = None, **kwargs) -> Response:
     """Performs an HTTP PATCH request.
 
     See yield_response for kwargs.
@@ -126,7 +126,7 @@ def patch(url: str, body: bytes | None = None, **kwargs) -> "Response":
     return request("PATCH", url=url, body=body, **kwargs)
 
 
-def delete(url: str, **kwargs) -> "Response":
+def delete(url: str, **kwargs) -> Response:
     """Performs an HTTP DELETE request.
 
     See yield_response for kwargs.
@@ -150,7 +150,7 @@ def yield_response(  # noqa: PLR0913
     source_address: str | tuple[str, int] | None = None,
     max_redirects: int | None = None,
     ssl_context: ssl.SSLContext | None = None,
-) -> Generator[HTTPResponse, None, None]:
+) -> Generator[HTTPResponse]:
     """yield_response is a low-level API that exposes the actual
     http.client.HTTPResponse via a contextmanager.
 

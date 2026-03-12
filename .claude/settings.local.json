@@ -4,8 +4,7 @@
 			"Bash(uv run pytest tests/test_database_manager.py -v)",
 			"Bash(source:*)",
 			"Bash(uv run:*)",
-			"Bash(uv run pytest tests/test_server.py -v)",
-			"Bash(uv run pytest tests/test_server.py::TestServer::test_server_integration_hourly_data_supports_legacy_date_query -v -s)"
+			"Bash(uv run pytest tests/test_server.py -v)"
 		],
 		"deny": []
 	},

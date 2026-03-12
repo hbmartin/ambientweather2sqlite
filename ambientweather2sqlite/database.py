@@ -19,6 +19,8 @@ from .exceptions import (
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 AggregationField = tuple[str, str, str]
+AggregatedRow = dict[str, float | int | str | None]
+HourlyAggregatedData = dict[str, list[AggregatedRow | None]]
 
 
 def _column_name(text: str) -> str:
@@ -151,6 +153,17 @@ def _normalize_hourly_date_range(
     return start_date_obj, end_date_obj
 
 
+def _date_keys_in_range(start_date: date, end_date: date) -> list[str]:
+    day_count = (end_date - start_date).days + 1
+    return [
+        (start_date + timedelta(days=offset)).isoformat() for offset in range(day_count)
+    ]
+
+
+def _empty_hourly_slots() -> list[AggregatedRow | None]:
+    return [None for _ in range(24)]
+
+
 def _format_sqlite_timestamp(value: datetime) -> str:
     return value.astimezone(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -190,8 +203,8 @@ def _fetch_rows_for_zoneinfo_range(
 def _aggregate_rows(
     rows: list[sqlite3.Row],
     parsed_fields: list[AggregationField],
-) -> dict[str, float | int | str | None]:
-    result: dict[str, float | int | str | None] = {"count": len(rows)}
+) -> AggregatedRow:
+    result: AggregatedRow = {"count": len(rows)}
 
     for agg_func, column_name, alias in parsed_fields:
         values = [row[column_name] for row in rows if row[column_name] is not None]
@@ -245,7 +258,7 @@ def _query_hourly_aggregated_data_with_zoneinfo(
     start_date: date,
     end_date: date,
     timezone: ZoneInfo,
-) -> dict[str, list[dict[str, float | int | str] | None]]:
+) -> HourlyAggregatedData:
     rows = _fetch_rows_for_zoneinfo_range(
         db_path=db_path,
         columns={column_name for _, column_name, _ in parsed_fields},
@@ -261,17 +274,19 @@ def _query_hourly_aggregated_data_with_zoneinfo(
         hour_rows = rows_by_date_and_hour.setdefault(date_key, {})
         hour_rows.setdefault(local_dt.hour, []).append(row)
 
-    result: dict[str, list[dict[str, float | int | str] | None]] = {}
-    for date_key in sorted(rows_by_date_and_hour):
-        hours: list[dict[str, float | int | str] | None] = [None] * 24
-        for hour, bucket_rows in rows_by_date_and_hour[date_key].items():
-            row_result: dict[str, float | int | str | None] = {
+    result: HourlyAggregatedData = {
+        date_key: _empty_hourly_slots()
+        for date_key in _date_keys_in_range(start_date, end_date)
+    }
+    for date_key, hour_rows in rows_by_date_and_hour.items():
+        hours = result[date_key]
+        for hour, bucket_rows in hour_rows.items():
+            row_result: AggregatedRow = {
                 "date": date_key,
                 "hour": f"{hour:02d}",
             }
             row_result.update(_aggregate_rows(bucket_rows, parsed_fields))
             hours[hour] = row_result
-        result[date_key] = hours
 
     return result
 
@@ -457,7 +472,7 @@ def query_hourly_aggregated_data(
     start_date: str,
     end_date: str | None = None,
     tz: str | None = None,
-) -> dict[str, list[dict[str, float | int | str] | None]]:
+) -> HourlyAggregatedData:
     """Query SQLite database with dynamic aggregation fields for date range.
 
     Args:
@@ -517,14 +532,14 @@ def query_hourly_aggregated_data(
     with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor().execute(query, params)
-        result = {}
+        result: HourlyAggregatedData = {
+            date_key: _empty_hourly_slots()
+            for date_key in _date_keys_in_range(start_date_obj, end_date_obj)
+        }
         for row in cursor:
-            row_dict = dict(row)
-            date = row_dict.get("date")
-            if date not in result:
-                result[date] = [None] * 24
-
+            row_dict: AggregatedRow = dict(row)
+            date_key = row_dict.get("date")
             hour = row_dict.get("hour")
-            if hour is not None:
-                result[date][int(hour)] = row_dict
+            if isinstance(date_key, str) and isinstance(hour, str):
+                result[date_key][int(hour)] = row_dict
         return result
