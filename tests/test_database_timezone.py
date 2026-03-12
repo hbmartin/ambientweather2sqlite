@@ -219,6 +219,30 @@ class TestDatabaseTimezone(TestCase):
         self.assertEqual(len(result[str(self.today)]), 24)
         self.assertNotIn(str(self.tomorrow), result)
 
+    def test_query_hourly_aggregated_data_includes_empty_day_for_fixed_offset(self):
+        """Test fixed-offset hourly queries retain requested empty dates."""
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
+            aggregation_fields=["avg_outTemp"],
+            start_date=str(self.tomorrow),
+            end_date=str(self.tomorrow),
+            tz="+00:00",
+        )
+
+        self.assertEqual(result, {str(self.tomorrow): [None] * 24})
+
+    def test_query_hourly_aggregated_data_includes_empty_day_for_iana_timezone(self):
+        """Test IANA timezone hourly queries retain requested empty dates."""
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
+            aggregation_fields=["avg_outTemp"],
+            start_date=str(self.tomorrow),
+            end_date=str(self.tomorrow),
+            tz="America/New_York",
+        )
+
+        self.assertEqual(result, {str(self.tomorrow): [None] * 24})
+
     def test_query_hourly_aggregated_data_rejects_invalid_calendar_dates(self):
         """Test hourly aggregation rejects impossible calendar dates."""
         with self.assertRaises(InvalidDateError):

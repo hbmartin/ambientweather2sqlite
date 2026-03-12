@@ -1,4 +1,5 @@
 import json
+import socket
 import tempfile
 import time
 from datetime import datetime
@@ -34,7 +35,7 @@ class TestServer(TestCase):
         self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
         self.server.start()
         self.port = self.server.httpd.server_address[1]
-        time.sleep(0.05)
+        self._wait_for_server_ready()
 
     def tearDown(self):
         self.server.shutdown()
@@ -43,6 +44,17 @@ class TestServer(TestCase):
     def _get_json(self, path) -> dict[str, object]:
         with urlopen(f"http://127.0.0.1:{self.port}{path}") as response:
             return json.load(response)
+
+    def _wait_for_server_ready(self, timeout: float = 2.0) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), timeout=0.1):
+                    return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    self.fail(f"Server did not become ready within {timeout} seconds")
+                time.sleep(0.01)
 
     def test_server_integration_hourly_data_supports_legacy_date_query(self):
         payload = self._get_json(
