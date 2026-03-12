@@ -1,2 +1,8 @@
-* When running commands e.g. pytest, be sure to activate the virtual environment using `source .venv/bin/activate`
-* Always run `uv run pytest` after making any code changes
+- Always run `uv run black .`; `uv run ruff check src --fix`; `uv run pyrefly check src`; and `uv run ty check src` after making changes.
+- Run `uv run lizard -Eduplicate src` and `uv run pytest tests/` after finishing implementation.
+- Any user facing changes (e.g. new CLI flags) should be documented in the `README.md`.
+- Use `uv` not `python` for running scripts.
+- Treat Type Hints as First-Class
+- Prefer Explicitness and Small Functions
+- Use modern Python features e.g. assignment expressions and Structural Pattern Matching where applicable
+- Use a parenthesized tuple of exception classes in the except clause

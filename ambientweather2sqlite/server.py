@@ -129,13 +129,13 @@ def create_request_handler(  # noqa: C901
             try:
                 query = parse_qs(urlparse(self.path).query)
                 aggregation_fields = query.get("q", [])
-                start_date = query.get("start_date", [])
+                start_date = query.get("start_date", []) or query.get("date", [])
                 end_date = query.get("end_date", [])
 
                 if not start_date:
                     self._send_json(
                         {
-                            "error": "start_date required e.g. /hourly?start_date=2025-06-22",  # noqa: E501
+                            "error": "start_date or date required e.g. /hourly?start_date=2025-06-22&tz=UTC",  # noqa: E501
                         },
                         400,
                     )

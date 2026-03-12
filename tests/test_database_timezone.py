@@ -3,6 +3,7 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
+from zoneinfo import ZoneInfo
 
 from ambientweather2sqlite.database import (
     _validate_timezone,
@@ -11,7 +12,11 @@ from ambientweather2sqlite.database import (
     query_daily_aggregated_data,
     query_hourly_aggregated_data,
 )
-from ambientweather2sqlite.exceptions import InvalidTimezoneError
+from ambientweather2sqlite.exceptions import (
+    InvalidDateError,
+    InvalidDateRangeError,
+    InvalidTimezoneError,
+)
 
 
 class TestDatabaseTimezone(TestCase):
@@ -26,36 +31,37 @@ class TestDatabaseTimezone(TestCase):
         self.assertTrue(was_created)
 
         # Insert test observations with relative timestamps (never stale)
-        today = datetime.now().date()
-        yesterday = today - timedelta(days=1)
+        self.today = datetime.now().date()
+        self.yesterday = self.today - timedelta(days=1)
+        self.tomorrow = self.today + timedelta(days=1)
 
         test_data = [
             {
-                "ts": f"{today} 12:00:00",
+                "ts": f"{self.today} 12:00:00",
                 "outTemp": 75.0,
                 "outHumi": 60.0,
                 "gustspeed": 10.0,
             },
             {
-                "ts": f"{today} 13:00:00",
+                "ts": f"{self.today} 13:00:00",
                 "outTemp": 77.0,
                 "outHumi": 58.0,
                 "gustspeed": 15.0,
             },
             {
-                "ts": f"{today} 14:00:00",
+                "ts": f"{self.today} 14:00:00",
                 "outTemp": 79.0,
                 "outHumi": 55.0,
                 "gustspeed": 20.0,
             },
             {
-                "ts": f"{yesterday} 12:00:00",
+                "ts": f"{self.yesterday} 12:00:00",
                 "outTemp": 72.0,
                 "outHumi": 65.0,
                 "gustspeed": 8.0,
             },
             {
-                "ts": f"{yesterday} 13:00:00",
+                "ts": f"{self.yesterday} 13:00:00",
                 "outTemp": 74.0,
                 "outHumi": 62.0,
                 "gustspeed": 12.0,
@@ -123,8 +129,7 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_with_valid_timezone(self):
         """Test hourly aggregation with valid timezone"""
-        today = datetime.now().date()
-        today_str = str(today)
+        today_str = str(self.today)
 
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
@@ -148,8 +153,7 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_with_utc_offset(self):
         """Test hourly aggregation with UTC offset timezone"""
-        today = datetime.now().date()
-        today_str = str(today)
+        today_str = str(self.today)
 
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
@@ -164,8 +168,7 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_with_invalid_timezone(self):
         """Test hourly aggregation with invalid timezone raises ValueError"""
-        today = datetime.now().date()
-        today_str = str(today)
+        today_str = str(self.today)
 
         with self.assertRaises(InvalidTimezoneError) as context:
             query_hourly_aggregated_data(
@@ -179,8 +182,7 @@ class TestDatabaseTimezone(TestCase):
 
     def test_query_hourly_aggregated_data_without_timezone(self):
         """Test hourly aggregation without timezone parameter"""
-        today = datetime.now().date()
-        today_str = str(today)
+        today_str = str(self.today)
 
         result = query_hourly_aggregated_data(
             db_path=self.db_path,
@@ -192,11 +194,85 @@ class TestDatabaseTimezone(TestCase):
         self.assertIn(today_str, result)
         self.assertEqual(len(result[today_str]), 24)
 
+    def test_query_hourly_aggregated_data_range_includes_both_days(self):
+        """Test hourly aggregation across an explicit yesterday..today range."""
+        insert_observation(
+            self.db_path,
+            {
+                "ts": f"{self.tomorrow} 09:00:00",
+                "outTemp": 88.0,
+                "gustspeed": 30.0,
+            },
+        )
+
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
+            aggregation_fields=["avg_outTemp", "max_gustspeed"],
+            start_date=str(self.yesterday),
+            end_date=str(self.today),
+            tz="UTC",
+        )
+
+        self.assertEqual(set(result), {str(self.yesterday), str(self.today)})
+        self.assertEqual(len(result[str(self.yesterday)]), 24)
+        self.assertEqual(len(result[str(self.today)]), 24)
+        self.assertNotIn(str(self.tomorrow), result)
+
+    def test_query_hourly_aggregated_data_rejects_invalid_calendar_dates(self):
+        """Test hourly aggregation rejects impossible calendar dates."""
+        with self.assertRaises(InvalidDateError):
+            query_hourly_aggregated_data(
+                db_path=self.db_path,
+                aggregation_fields=["avg_outTemp"],
+                start_date="2026-02-30",
+                tz="UTC",
+            )
+
+    def test_query_hourly_aggregated_data_rejects_reversed_ranges(self):
+        """Test hourly aggregation rejects end dates before start dates."""
+        with self.assertRaises(InvalidDateRangeError):
+            query_hourly_aggregated_data(
+                db_path=self.db_path,
+                aggregation_fields=["avg_outTemp"],
+                start_date=str(self.today),
+                end_date=str(self.yesterday),
+                tz="UTC",
+            )
+
+    def test_query_hourly_aggregated_data_handles_dst_hour_with_iana_timezone(self):
+        """Test hourly aggregation preserves repeated DST hours for IANA zones."""
+        insert_observation(
+            self.db_path,
+            {
+                "ts": "2025-11-02 05:30:00",
+                "outTemp": 50.0,
+            },
+        )
+        insert_observation(
+            self.db_path,
+            {
+                "ts": "2025-11-02 06:30:00",
+                "outTemp": 52.0,
+            },
+        )
+
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
+            aggregation_fields=["avg_outTemp"],
+            start_date="2025-11-02",
+            end_date="2025-11-02",
+            tz="America/New_York",
+        )
+
+        self.assertIn("2025-11-02", result)
+        self.assertIsNone(result["2025-11-02"][0])
+        self.assertEqual(result["2025-11-02"][1]["count"], 2)
+        self.assertEqual(result["2025-11-02"][1]["avg_outTemp"], 51.0)
+
     def test_timezone_affects_aggregation_results(self):
         """Test that different timezones can produce different results"""
         # Insert data at timezone boundary
-        today = datetime.now().date()
-        boundary_time = f"{today} 23:30:00"
+        boundary_time = f"{self.today} 23:30:00"
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -286,26 +362,20 @@ class TestDatabaseTimezone(TestCase):
     def test_validate_timezone_valid_zoneinfo(self):
         """Test _validate_timezone with valid ZoneInfo timezone"""
         result = _validate_timezone("America/New_York")
-        # Should return a valid hours string, exact value depends on current time
-        self.assertIsInstance(result, str)
-        self.assertTrue(result.endswith(" hours"))
-        # Should be a valid float
-        hours = float(result.replace(" hours", ""))
-        self.assertIsInstance(hours, float)
+        self.assertIsInstance(result, ZoneInfo)
+        self.assertEqual(result.key, "America/New_York")
 
     def test_validate_timezone_utc_zoneinfo(self):
         """Test _validate_timezone with UTC timezone"""
         result = _validate_timezone("UTC")
-        self.assertEqual(result, "0.0 hours")
+        self.assertIsInstance(result, ZoneInfo)
+        self.assertEqual(result.key, "UTC")
 
     def test_validate_timezone_europe_london(self):
         """Test _validate_timezone with Europe/London timezone"""
         result = _validate_timezone("Europe/London")
-        # Should return a valid hours string
-        self.assertIsInstance(result, str)
-        self.assertTrue(result.endswith(" hours"))
-        hours = float(result.replace(" hours", ""))
-        self.assertIsInstance(hours, float)
+        self.assertIsInstance(result, ZoneInfo)
+        self.assertEqual(result.key, "Europe/London")
 
     def test_validate_timezone_invalid_offset_format(self):
         """Test _validate_timezone with invalid offset format"""

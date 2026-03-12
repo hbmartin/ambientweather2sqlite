@@ -1,12 +1,13 @@
 import re
 import sqlite3
-from datetime import datetime
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .exceptions import (
     InvalidColumnNameError,
     InvalidDateError,
+    InvalidDateRangeError,
     InvalidFormatError,
     InvalidPriorDaysError,
     InvalidTimezoneError,
@@ -16,6 +17,7 @@ from .exceptions import (
 
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
+AggregationField = tuple[str, str, str]
 
 
 def _column_name(text: str) -> str:
@@ -28,7 +30,7 @@ def _column_name(text: str) -> str:
     return "".join(result)
 
 
-def _validate_timezone(tz: str | None) -> str:
+def _validate_timezone(tz: str | None) -> str | ZoneInfo:
     if not tz or tz == "localtime":
         return "localtime"
 
@@ -53,18 +55,14 @@ def _validate_timezone(tz: str | None) -> str:
         return f"{offset_hours} hours"
 
     try:
-        if (offset := ZoneInfo(tz).utcoffset(datetime.now())) is not None:
-            hours = offset.total_seconds() / 3600
-            return f"{hours} hours"
+        return ZoneInfo(tz)
     except (ModuleNotFoundError, ValueError, KeyError) as e:
         raise InvalidTimezoneError(tz) from e
-    raise InvalidTimezoneError(tz)
 
 
-def _select_parts_from_aggregation_fields(
+def _parse_aggregation_fields(
     aggregation_fields: list[str],
-    datetime_expression: str,
-) -> list[str]:
+) -> list[AggregationField]:
     parsed_fields = []
 
     for field in aggregation_fields:
@@ -84,6 +82,13 @@ def _select_parts_from_aggregation_fields(
     if not parsed_fields:
         raise MissingAggregationFieldsError
 
+    return parsed_fields
+
+
+def _select_parts_from_parsed_fields(
+    parsed_fields: list[AggregationField],
+    datetime_expression: str,
+) -> list[str]:
     select_parts = [datetime_expression]
 
     select_parts.extend(
@@ -94,6 +99,180 @@ def _select_parts_from_aggregation_fields(
     select_parts.append("COUNT(*) as count")
 
     return select_parts
+
+
+def _select_parts_from_aggregation_fields(
+    aggregation_fields: list[str],
+    datetime_expression: str,
+) -> list[str]:
+    return _select_parts_from_parsed_fields(
+        _parse_aggregation_fields(aggregation_fields),
+        datetime_expression,
+    )
+
+
+def _parse_query_date(date_string: str) -> date:
+    try:
+        return date.fromisoformat(date_string)
+    except ValueError as e:
+        raise InvalidDateError(date_string) from e
+
+
+def _current_date_for_timezone(timezone: str | ZoneInfo) -> date:
+    if isinstance(timezone, ZoneInfo):
+        return datetime.now(timezone).date()
+
+    if timezone == "localtime":
+        return datetime.now().date()
+
+    offset_hours = float(timezone.removesuffix(" hours"))
+    return (datetime.now(UTC) + timedelta(hours=offset_hours)).date()
+
+
+def _normalize_hourly_date_range(
+    start_date: str,
+    end_date: str | None,
+    timezone: str | ZoneInfo,
+) -> tuple[date, date]:
+    start_date_obj = _parse_query_date(start_date)
+    end_date_obj = (
+        _parse_query_date(end_date)
+        if end_date is not None
+        else _current_date_for_timezone(timezone)
+    )
+
+    if end_date_obj < start_date_obj:
+        raise InvalidDateRangeError(
+            start_date_obj.isoformat(),
+            end_date_obj.isoformat(),
+        )
+
+    return start_date_obj, end_date_obj
+
+
+def _format_sqlite_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_stored_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _fetch_rows_for_zoneinfo_range(
+    db_path: str,
+    columns: set[str],
+    start_date: date,
+    end_date: date,
+    timezone: ZoneInfo,
+) -> list[sqlite3.Row]:
+    start_ts = _format_sqlite_timestamp(
+        datetime.combine(start_date, time.min, tzinfo=timezone),
+    )
+    end_ts = _format_sqlite_timestamp(
+        datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone),
+    )
+    select_columns = ", ".join([_TS_COL, *sorted(columns)])
+    query = (
+        f"SELECT {select_columns} FROM {_DEFAULT_TABLE_NAME} "
+        f"WHERE {_TS_COL} >= ? AND {_TS_COL} < ? ORDER BY {_TS_COL}"
+    )
+
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor().execute(query, (start_ts, end_ts))
+        return cursor.fetchall()
+
+
+def _aggregate_rows(
+    rows: list[sqlite3.Row],
+    parsed_fields: list[AggregationField],
+) -> dict[str, float | int | str | None]:
+    result: dict[str, float | int | str | None] = {"count": len(rows)}
+
+    for agg_func, column_name, alias in parsed_fields:
+        values = [row[column_name] for row in rows if row[column_name] is not None]
+        if not values:
+            result[alias] = None
+        elif agg_func == "AVG":
+            result[alias] = sum(values) / len(values)
+        elif agg_func == "MAX":
+            result[alias] = max(values)
+        elif agg_func == "MIN":
+            result[alias] = min(values)
+        elif agg_func == "SUM":
+            result[alias] = sum(values)
+
+    return result
+
+
+def _query_daily_aggregated_data_with_zoneinfo(
+    db_path: str,
+    parsed_fields: list[AggregationField],
+    prior_days: int,
+    timezone: ZoneInfo,
+) -> list[dict[str, float | int | str]]:
+    today = datetime.now(timezone).date()
+    start_date = today - timedelta(days=prior_days)
+    rows = _fetch_rows_for_zoneinfo_range(
+        db_path=db_path,
+        columns={column_name for _, column_name, _ in parsed_fields},
+        start_date=start_date,
+        end_date=today,
+        timezone=timezone,
+    )
+    rows_by_date: dict[str, list[sqlite3.Row]] = {}
+
+    for row in rows:
+        date_key = _parse_stored_timestamp(row[_TS_COL]).astimezone(timezone).date()
+        rows_by_date.setdefault(date_key.isoformat(), []).append(row)
+
+    result = []
+    for date_key in sorted(rows_by_date):
+        row_result: dict[str, float | int | str | None] = {"date": date_key}
+        row_result.update(_aggregate_rows(rows_by_date[date_key], parsed_fields))
+        result.append(row_result)
+
+    return result
+
+
+def _query_hourly_aggregated_data_with_zoneinfo(
+    db_path: str,
+    parsed_fields: list[AggregationField],
+    start_date: date,
+    end_date: date,
+    timezone: ZoneInfo,
+) -> dict[str, list[dict[str, float | int | str] | None]]:
+    rows = _fetch_rows_for_zoneinfo_range(
+        db_path=db_path,
+        columns={column_name for _, column_name, _ in parsed_fields},
+        start_date=start_date,
+        end_date=end_date,
+        timezone=timezone,
+    )
+    rows_by_date_and_hour: dict[str, dict[int, list[sqlite3.Row]]] = {}
+
+    for row in rows:
+        local_dt = _parse_stored_timestamp(row[_TS_COL]).astimezone(timezone)
+        date_key = local_dt.date().isoformat()
+        hour_rows = rows_by_date_and_hour.setdefault(date_key, {})
+        hour_rows.setdefault(local_dt.hour, []).append(row)
+
+    result: dict[str, list[dict[str, float | int | str] | None]] = {}
+    for date_key in sorted(rows_by_date_and_hour):
+        hours: list[dict[str, float | int | str] | None] = [None] * 24
+        for hour, bucket_rows in rows_by_date_and_hour[date_key].items():
+            row_result: dict[str, float | int | str | None] = {
+                "date": date_key,
+                "hour": f"{hour:02d}",
+            }
+            row_result.update(_aggregate_rows(bucket_rows, parsed_fields))
+            hours[hour] = row_result
+        result[date_key] = hours
+
+    return result
 
 
 def _ensure_columns(
@@ -235,7 +414,15 @@ def query_daily_aggregated_data(
     if not isinstance(prior_days, int):
         raise InvalidPriorDaysError(prior_days)
 
+    parsed_fields = _parse_aggregation_fields(aggregation_fields)
     timezone = _validate_timezone(tz)
+    if isinstance(timezone, ZoneInfo):
+        return _query_daily_aggregated_data_with_zoneinfo(
+            db_path=db_path,
+            parsed_fields=parsed_fields,
+            prior_days=prior_days,
+            timezone=timezone,
+        )
 
     table_name: str = _DEFAULT_TABLE_NAME
     date_column: str = _TS_COL
@@ -243,8 +430,8 @@ def query_daily_aggregated_data(
     datetime_expression = f"DATE({date_column}, '{timezone}') as date"
     date_filter_expr = f"DATE({date_column}, '{timezone}')"
 
-    select_parts = _select_parts_from_aggregation_fields(
-        aggregation_fields=aggregation_fields,
+    select_parts = _select_parts_from_parsed_fields(
+        parsed_fields=parsed_fields,
         datetime_expression=datetime_expression,
     )
 
@@ -269,7 +456,7 @@ def query_hourly_aggregated_data(
     start_date: str,
     end_date: str | None = None,
     tz: str | None = None,
-) -> dict[str, list[dict[str, float | int | str]]]:
+) -> dict[str, list[dict[str, float | int | str] | None]]:
     """Query SQLite database with dynamic aggregation fields for date range.
 
     Args:
@@ -280,33 +467,42 @@ def query_hourly_aggregated_data(
         tz: Timezone string (e.g., 'America/New_York', '+05:30')
 
     Returns:
-        List of dicts containing date, hour, and aggregated values
+        Dict mapping date strings to 24 hourly slots.
+        Each slot contains an aggregated result dict or None when that hour
+        has no matching rows.
 
     """
     table_name: str = _DEFAULT_TABLE_NAME
     date_column: str = _TS_COL
 
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", start_date):
-        raise InvalidDateError(start_date)
-
-    if end_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", end_date):
-        raise InvalidDateError(end_date)
-
+    parsed_fields = _parse_aggregation_fields(aggregation_fields)
     timezone = _validate_timezone(tz)
+    start_date_obj, end_date_obj = _normalize_hourly_date_range(
+        start_date=start_date,
+        end_date=end_date,
+        timezone=timezone,
+    )
+    if isinstance(timezone, ZoneInfo):
+        return _query_hourly_aggregated_data_with_zoneinfo(
+            db_path=db_path,
+            parsed_fields=parsed_fields,
+            start_date=start_date_obj,
+            end_date=end_date_obj,
+            timezone=timezone,
+        )
 
     datetime_expression = f"DATE({date_column}, '{timezone}') as date"
     hour_expression = f"strftime('%H', {date_column}, '{timezone}') as hour"
     date_filter_expr = f"DATE({date_column}, '{timezone}')"
     group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{timezone}')"
 
-    select_parts = _select_parts_from_aggregation_fields(
-        aggregation_fields=aggregation_fields,
+    select_parts = _select_parts_from_parsed_fields(
+        parsed_fields=parsed_fields,
         datetime_expression=datetime_expression + ", " + hour_expression,
     )
 
-    where_clause = f"WHERE {date_filter_expr} >= '{start_date}'"
-    if end_date:
-        where_clause += f" AND {date_filter_expr} <= '{end_date}'"
+    where_clause = f"WHERE {date_filter_expr} >= ? AND {date_filter_expr} <= ?"
+    params = (start_date_obj.isoformat(), end_date_obj.isoformat())
 
     query = f"""
     SELECT
@@ -319,7 +515,7 @@ def query_hourly_aggregated_data(
 
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
-        cursor = conn.cursor().execute(query)
+        cursor = conn.cursor().execute(query, params)
         result = {}
         for row in cursor:
             row_dict = dict(row)

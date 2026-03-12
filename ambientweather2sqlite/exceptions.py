@@ -28,7 +28,15 @@ class InvalidColumnNameError(Aw2SqliteError):
 
 class InvalidDateError(Aw2SqliteError):
     def __init__(self, date: str):
-        super().__init__(f"Invalid date format: {date}. Expected YYYY-MM-DD")
+        super().__init__(f"Invalid date: {date}. Expected a valid YYYY-MM-DD date")
+
+
+class InvalidDateRangeError(Aw2SqliteError):
+    def __init__(self, start_date: str, end_date: str):
+        super().__init__(
+            "Invalid date range: "
+            f"end_date ({end_date}) must be on or after start_date ({start_date})",
+        )
 
 
 class MissingAggregationFieldsError(Aw2SqliteError):
