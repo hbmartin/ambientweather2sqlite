@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 type SensorValue = int | float | None
+type LiveData = dict[str, SensorValue]
 type ObservationValue = str | SensorValue
 type Observation = Mapping[str, ObservationValue]
 type LabelMap = dict[str, str]
@@ -12,7 +13,6 @@ type AggregatedValue = str | int | float | None
 type AggregatedRow = dict[str, AggregatedValue]
 type HourlyAggregatedData = dict[str, list[AggregatedRow | None]]
 type QueryParams = dict[str, list[str]]
-type LiveData = dict[str, SensorValue]
 
 
 @dataclass(frozen=True, slots=True)

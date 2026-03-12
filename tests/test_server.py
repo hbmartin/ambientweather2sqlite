@@ -4,6 +4,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 from unittest import TestCase
 from urllib.request import urlopen
 
@@ -11,7 +12,7 @@ from ambientweather2sqlite.database import (
     create_database_if_not_exists,
     insert_observation,
 )
-from ambientweather2sqlite.server import Server
+from ambientweather2sqlite.server import Server, create_request_handler
 
 
 class TestServer(TestCase):
@@ -63,3 +64,21 @@ class TestServer(TestCase):
 
         self.assertIn("data", payload)
         self.assertIn(str(self.today), payload["data"])
+
+    def test_create_request_handler_reuses_a_single_file_handler_per_instance(self):
+        handler_class = create_request_handler(
+            "http://127.0.0.1:9",
+            self.db_path,
+        )
+        duplicate_handler_class = create_request_handler(
+            "http://127.0.0.1:9",
+            self.db_path,
+        )
+        typed_handler_class = cast("Any", handler_class)
+        typed_duplicate_handler_class = cast("Any", duplicate_handler_class)
+
+        self.assertEqual(typed_handler_class.log_handler_count(), 1)
+        self.assertEqual(typed_duplicate_handler_class.log_handler_count(), 1)
+
+        typed_handler_class.teardown_logger()
+        typed_duplicate_handler_class.teardown_logger()

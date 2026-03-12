@@ -1,4 +1,4 @@
-import sys
+import argparse
 from pathlib import Path
 
 from .configuration import create_config_file, get_config_path, load_config
@@ -6,40 +6,34 @@ from .daemon import start_daemon
 from .database import create_database_if_not_exists
 
 
-def get_int_argument(args: list[str]) -> int | None:
-    for arg in args:
-        try:
-            return int(arg)
-        except ValueError:
-            pass
-    return None
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the AmbientWeather to SQLite daemon.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Port number for the HTTP JSON API server.",
+    )
+    parser.add_argument(
+        "--config",
+        dest="config_path",
+        type=Path,
+        help="Path to a TOML config file.",
+    )
+    return parser.parse_args(argv)
 
 
-def get_str_argument(args: list[str]) -> str | None:
-    """Find the first non-numerical argument in the list and return it as string."""
-    for arg in args:
-        try:
-            int(arg)
-        except ValueError:
-            return arg
-    return None
-
-
-def main() -> None:
-    default_config_path = get_config_path()
-    port: int | None = None
-    if len(sys.argv) > 1:
-        args = sys.argv[1:]
-        port = get_int_argument(args)
-        if config_override := get_str_argument(args):
-            default_config_path = Path(config_override)
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    default_config_path = args.config_path or get_config_path()
     config_path = create_config_file(default_config_path)
     config = load_config(config_path)
     create_database_if_not_exists(config.database_path)
     start_daemon(
         live_data_url=config.live_data_url,
         database_path=config.database_path,
-        port=port or config.port,
+        port=args.port if args.port is not None else config.port,
     )
 
 
