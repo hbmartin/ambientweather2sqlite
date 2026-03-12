@@ -1,5 +1,6 @@
 import re
 import sqlite3
+from collections.abc import Mapping
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -18,9 +19,13 @@ from .exceptions import (
 
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
-AggregationField = tuple[str, str, str]
-AggregatedRow = dict[str, float | int | str | None]
-HourlyAggregatedData = dict[str, list[AggregatedRow | None]]
+_SQLITE_BUSY_TIMEOUT_MS = 5_000
+_SQLITE_MMAP_SIZE_BYTES = 268_435_456
+type AggregationField = tuple[str, str, str]
+type AggregatedRow = dict[str, str | int | float | None]
+type HourlyAggregatedData = dict[str, list[AggregatedRow | None]]
+type ObservationValue = str | int | float | None
+type Observation = Mapping[str, ObservationValue]
 
 
 def _column_name(text: str) -> str:
@@ -164,11 +169,57 @@ def _empty_hourly_slots() -> list[AggregatedRow | None]:
     return [None for _ in range(24)]
 
 
+def _configure_connection(
+    conn: sqlite3.Connection,
+    *,
+    read_only: bool,
+    use_row_factory: bool = False,
+) -> sqlite3.Connection:
+    conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+    if use_row_factory:
+        conn.row_factory = sqlite3.Row
+    if not read_only:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute(f"PRAGMA mmap_size={_SQLITE_MMAP_SIZE_BYTES}")
+    return conn
+
+
+def _connect_database(
+    db_path: str,
+    *,
+    read_only: bool,
+    use_row_factory: bool = False,
+) -> sqlite3.Connection:
+    connect_target = f"file:{db_path}?mode=ro" if read_only else db_path
+    conn = sqlite3.connect(
+        connect_target,
+        uri=read_only,
+        timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
+    )
+    return _configure_connection(
+        conn,
+        read_only=read_only,
+        use_row_factory=use_row_factory,
+    )
+
+
 def _format_sqlite_timestamp(value: datetime) -> str:
+    """Store timestamps as UTC naive strings in SQLite's text format.
+
+    Callers should pass timezone-aware datetimes because the value is converted to
+    UTC before its tzinfo is stripped for storage.
+    """
     return value.astimezone(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_stored_timestamp(value: str) -> datetime:
+    """Parse stored timestamps and normalize them to UTC-aware datetimes.
+
+    Naive timestamps are assumed to have been stored in UTC. Aware timestamps are
+    converted to UTC before being returned.
+    """
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
@@ -194,8 +245,9 @@ def _fetch_rows_for_zoneinfo_range(
         f"WHERE {_TS_COL} >= ? AND {_TS_COL} < ? ORDER BY {_TS_COL}"
     )
 
-    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(
+        _connect_database(db_path, read_only=True, use_row_factory=True),
+    ) as conn:
         cursor = conn.cursor().execute(query, (start_ts, end_ts))
         return cursor.fetchall()
 
@@ -227,7 +279,7 @@ def _query_daily_aggregated_data_with_zoneinfo(
     parsed_fields: list[AggregationField],
     prior_days: int,
     timezone: ZoneInfo,
-) -> list[dict[str, float | int | str]]:
+) -> list[AggregatedRow]:
     today = datetime.now(timezone).date()
     start_date = today - timedelta(days=prior_days)
     rows = _fetch_rows_for_zoneinfo_range(
@@ -243,9 +295,9 @@ def _query_daily_aggregated_data_with_zoneinfo(
         date_key = _parse_stored_timestamp(row[_TS_COL]).astimezone(timezone).date()
         rows_by_date.setdefault(date_key.isoformat(), []).append(row)
 
-    result = []
+    result: list[AggregatedRow] = []
     for date_key in sorted(rows_by_date):
-        row_result: dict[str, float | int | str | None] = {"date": date_key}
+        row_result: AggregatedRow = {"date": date_key}
         row_result.update(_aggregate_rows(rows_by_date[date_key], parsed_fields))
         result.append(row_result)
 
@@ -349,7 +401,7 @@ def create_database_if_not_exists(
     if Path(db_path).exists():
         return False
 
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(_connect_database(db_path, read_only=False)) as conn:
         cursor = conn.cursor()
 
         table_schema = f"""
@@ -360,11 +412,6 @@ def create_database_if_not_exists(
 
         cursor.execute(table_schema)
         conn.commit()
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA mmap_size=268435456")  # 256MB
-        conn.commit()
 
         print(f"Database created with table '{table_name}' at: {db_path}")
         return True
@@ -373,7 +420,7 @@ def create_database_if_not_exists(
 def _insert_dict_row(
     conn: sqlite3.Connection,
     table_name: str,
-    data_dict: dict[str, float | None],
+    data_dict: Observation,
 ) -> int | None:
     """Alternative version that takes an existing connection.
 
@@ -403,8 +450,11 @@ def _insert_dict_row(
     return cursor.lastrowid
 
 
-def insert_observation(db_path: str, observation: dict[str, float | None]) -> None:
-    with closing(sqlite3.connect(db_path)) as conn:
+def insert_observation(
+    db_path: str,
+    observation: Observation,
+) -> None:
+    with closing(_connect_database(db_path, read_only=False)) as conn:
         _ensure_columns(conn, set(observation.keys()))
         _insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
 
@@ -414,7 +464,7 @@ def query_daily_aggregated_data(
     aggregation_fields: list[str],
     prior_days: int = 7,
     tz: str | None = None,
-) -> list[dict[str, float | int | str]]:
+) -> list[AggregatedRow]:
     """Query SQLite database with dynamic aggregation fields.
 
     Args:
@@ -460,8 +510,9 @@ def query_daily_aggregated_data(
     ORDER BY date
     """
 
-    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(
+        _connect_database(db_path, read_only=True, use_row_factory=True),
+    ) as conn:
         cursor = conn.cursor().execute(query)
         return [dict(row) for row in cursor]
 
@@ -529,8 +580,9 @@ def query_hourly_aggregated_data(
     ORDER BY date, hour
     """
 
-    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(
+        _connect_database(db_path, read_only=True, use_row_factory=True),
+    ) as conn:
         cursor = conn.cursor().execute(query, params)
         result: HourlyAggregatedData = {
             date_key: _empty_hourly_slots()

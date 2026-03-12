@@ -43,9 +43,10 @@ DEFAULT_TIMEOUT: float = 3
 # e.g. "Python 3.8.10"
 DEFAULT_UA = "Python " + sys.version.split()[0]
 
-Headers = MutableMapping[str, str] | HTTPMessage
-# pyrefly: ignore  # not-a-type
-JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+type Headers = MutableMapping[str, str] | HTTPMessage
+type JsonValue = (
+    None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+)
 
 
 def request(
@@ -416,7 +417,7 @@ def _prepare_incoming_headers(headers: Headers) -> HTTPMessage:
 
 def _setdefault_header(headers: Headers, name: str, value: str) -> None:
     if name not in headers:
-        headers[name] = value  # type: ignore[index]
+        cast("MutableMapping[str, str]", headers)[name] = value
 
 
 def _prepare_body(

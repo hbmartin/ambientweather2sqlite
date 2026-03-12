@@ -23,9 +23,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/harold-martin/ambientweather2sqlite"
-Repository = "https://github.com/harold-martin/ambientweather2sqlite"
-Issues = "https://github.com/harold-martin/ambientweather2sqlite/issues"
+Homepage = "https://github.com/hbmartin/ambientweather2sqlite"
+Repository = "https://github.com/hbmartin/ambientweather2sqlite"
+Issues = "https://github.com/hbmartin/ambientweather2sqlite/issues"
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]
@@ -39,7 +39,7 @@ ambientweather2sqlite = "ambientweather2sqlite.__main__:main"
 
 [dependency-groups]
 dev = [
-    "black>=25.1.0",
+    "black>=25.11.0",
     "codecov>=2.1.13",
     "pyrefly>=0.24.2",
     "pytest>=8.0.0",

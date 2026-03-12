@@ -1,7 +1,10 @@
-from enum import Enum
+from enum import StrEnum
+
+type LabelMap = dict[str, str]
+type ColumnUnitMap = dict[str, str]
 
 
-class Units(Enum):
+class Units(StrEnum):
     WIND = "Wind"
     RAINFALL = "Rainfall"
     PRESSURE = "Pressure"
@@ -11,8 +14,7 @@ class Units(Enum):
     HUMIDITY = "Humidity"
     WIND_DIRECTION = "Wind Direction"
 
-
-LABEL_TO_UNIT = {
+LABEL_TO_UNIT: dict[str, Units] = {
     "gust": Units.WIND,
     "rain": Units.RAINFALL,
     "press": Units.PRESSURE,
@@ -25,7 +27,7 @@ LABEL_TO_UNIT = {
 }
 
 # https://github.com/hgrecco/pint/blob/master/pint/default_en.txt
-AW_UNIT_TO_PINT_UNIT = {
+AW_UNIT_TO_PINT_UNIT: dict[str, str] = {
     "m/s": "mps",
     "km/h": "kph",
     "ft/s": "fps",
@@ -48,11 +50,11 @@ AW_UNIT_TO_PINT_UNIT = {
 
 
 def units_for_columns(
-    labels: dict[str, str],
+    labels: LabelMap,
     units: dict[Units, str],
-) -> tuple[dict[str, str], dict[str, str]]:
-    column_to_unit = {}
-    labels_with_units = {}
+) -> tuple[LabelMap, ColumnUnitMap]:
+    column_to_unit: ColumnUnitMap = {}
+    labels_with_units: LabelMap = {}
     for column, label in labels.items():
         labels_with_units[column] = label
         for substr, unit in LABEL_TO_UNIT.items():

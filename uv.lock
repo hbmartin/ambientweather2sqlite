@@ -22,7 +22,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "black", specifier = ">=25.1.0" },
+    { name = "black", specifier = ">=25.11.0" },
     { name = "codecov", specifier = ">=2.1.13" },
     { name = "pyrefly", specifier = ">=0.24.2" },
     { name = "pytest", specifier = ">=8.0.0" },

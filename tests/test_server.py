@@ -41,8 +41,8 @@ class TestServer(TestCase):
         self.server.shutdown()
         Path(self.db_path).unlink(missing_ok=True)
 
-    def _get_json(self, path) -> dict[str, object]:
-        with urlopen(f"http://127.0.0.1:{self.port}{path}") as response:
+    def _get_json(self, path: str) -> dict[str, dict[str, object]]:
+        with urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=1) as response:
             return json.load(response)
 
     def _wait_for_server_ready(self, timeout: float = 2.0) -> None:
