@@ -20,21 +20,30 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 
 ## Installation
 
-* macOS: `brew install pipx && pipx install ambientweather2sqlite`
-* Ubuntu / Debian: `sudo apt update && sudo apt install pipx && pipx install ambientweather2sqlite`
-* Fedora: `sudo dnf install pipx && pipx install ambientweather2sqlite`
+```bash
+uvx ambientweather2sqlite
+```
+
+Or install it persistently:
+
+```bash
+uv tool install ambientweather2sqlite
+```
 
 Requires Python 3.14+.
 
 ## Setup
 
-```
+```bash
 ambientweather2sqlite [<port>] [<config_path>]
 ```
 
 Both arguments are optional and can be provided in any order:
-- `<port>` - Port number for the HTTP JSON API server (overrides config file value)
-- `<config_path>` - Path to an existing TOML config file
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `<port>` | Integer | Config file value, or disabled | Port number for the HTTP JSON API server. Overrides the `port` value in the config file. |
+| `<config_path>` | String | `./aw2sqlite.toml`, then `~/.aw2sqlite.toml` | Path to a TOML config file. Uses it if it exists; otherwise setup writes a new file there. If omitted, searches the default locations. |
 
 On the first run, if no config file is found, you will be guided through an interactive setup wizard that prompts for:
 
@@ -75,13 +84,14 @@ SQLite is configured with WAL journal mode, normal synchronous writes, in-memory
 
 ## HTTP JSON API
 
-When a port is configured, the daemon starts a threaded HTTP server on `localhost` with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`.
+When a port is configured, the daemon starts an HTTP server on `localhost` in a background thread with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`.
 
 ### `GET /` - Live Data
 
 Returns current sensor readings fetched directly from the weather station, along with human-readable labels.
 
 **Response:**
+
 ```json
 {
   "data": {
@@ -116,12 +126,14 @@ Returns aggregated sensor data grouped by date.
 | `days`    | No       | `7`     | Number of prior days to include |
 
 **Examples:**
-```
+
+```text
 /daily?tz=America/New_York&q=avg_outHumi&days=7
 /daily?tz=Europe/London&q=min_outTemp&q=sum_eventrain
 ```
 
 **Response:**
+
 ```json
 {
   "data": [
@@ -154,13 +166,15 @@ Returns aggregated sensor data grouped by date and hour. Each date contains exac
 | `date`       | -        | -       | Backward-compatible alias for `start_date` |
 
 **Examples:**
-```
+
+```text
 /hourly?start_date=2025-06-27&tz=America/Chicago&q=avg_outHumi
 /hourly?start_date=2025-06-26&end_date=2025-06-27&tz=%2B05%3A30&q=max_gustspeed
 /hourly?date=2025-06-27&tz=UTC&q=avg_outHumi
 ```
 
-**Response:**
+**Response (truncated for brevity):**
+
 ```json
 {
   "data": {
@@ -172,12 +186,13 @@ Returns aggregated sensor data grouped by date and hour. Each date contains exac
         "count": 60
       },
       null,
-      null,
-      "... 24 slots total, one per hour ..."
+      null
     ]
   }
 }
 ```
+
+The actual array always contains 24 entries, one per hour.
 
 ### Aggregation Fields
 

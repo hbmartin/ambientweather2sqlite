@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import re
 import sqlite3
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 from .exceptions import (
     InvalidColumnNameError,
@@ -21,6 +27,7 @@ _TS_COL = "ts"
 AggregationField = tuple[str, str, str]
 AggregatedRow = dict[str, float | int | str | None]
 HourlyAggregatedData = dict[str, list[AggregatedRow | None]]
+ObservationValue = str | int | float | None
 
 
 def _column_name(text: str) -> str:
@@ -165,10 +172,20 @@ def _empty_hourly_slots() -> list[AggregatedRow | None]:
 
 
 def _format_sqlite_timestamp(value: datetime) -> str:
+    """Store timestamps as UTC naive strings in SQLite's text format.
+
+    Callers should pass timezone-aware datetimes because the value is converted to
+    UTC before its tzinfo is stripped for storage.
+    """
     return value.astimezone(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_stored_timestamp(value: str) -> datetime:
+    """Parse stored timestamps and normalize them to UTC-aware datetimes.
+
+    Naive timestamps are assumed to have been stored in UTC. Aware timestamps are
+    converted to UTC before being returned.
+    """
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
@@ -227,7 +244,7 @@ def _query_daily_aggregated_data_with_zoneinfo(
     parsed_fields: list[AggregationField],
     prior_days: int,
     timezone: ZoneInfo,
-) -> list[dict[str, float | int | str]]:
+) -> list[AggregatedRow]:
     today = datetime.now(timezone).date()
     start_date = today - timedelta(days=prior_days)
     rows = _fetch_rows_for_zoneinfo_range(
@@ -243,9 +260,9 @@ def _query_daily_aggregated_data_with_zoneinfo(
         date_key = _parse_stored_timestamp(row[_TS_COL]).astimezone(timezone).date()
         rows_by_date.setdefault(date_key.isoformat(), []).append(row)
 
-    result = []
+    result: list[AggregatedRow] = []
     for date_key in sorted(rows_by_date):
-        row_result: dict[str, float | int | str | None] = {"date": date_key}
+        row_result: AggregatedRow = {"date": date_key}
         row_result.update(_aggregate_rows(rows_by_date[date_key], parsed_fields))
         result.append(row_result)
 
@@ -373,7 +390,7 @@ def create_database_if_not_exists(
 def _insert_dict_row(
     conn: sqlite3.Connection,
     table_name: str,
-    data_dict: dict[str, float | None],
+    data_dict: Mapping[str, ObservationValue],
 ) -> int | None:
     """Alternative version that takes an existing connection.
 
@@ -403,7 +420,10 @@ def _insert_dict_row(
     return cursor.lastrowid
 
 
-def insert_observation(db_path: str, observation: dict[str, float | None]) -> None:
+def insert_observation(
+    db_path: str,
+    observation: Mapping[str, ObservationValue],
+) -> None:
     with closing(sqlite3.connect(db_path)) as conn:
         _ensure_columns(conn, set(observation.keys()))
         _insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
@@ -414,7 +434,7 @@ def query_daily_aggregated_data(
     aggregation_fields: list[str],
     prior_days: int = 7,
     tz: str | None = None,
-) -> list[dict[str, float | int | str]]:
+) -> list[AggregatedRow]:
     """Query SQLite database with dynamic aggregation fields.
 
     Args:
