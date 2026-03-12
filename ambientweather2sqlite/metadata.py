@@ -40,5 +40,5 @@ def create_metadata(
             },
         },
     }
-    path.write_text(json.dumps(metadata, indent=4))
+    path.write_text(json.dumps(metadata, indent=4), encoding="utf-8")
     return labels_with_units, column_to_unit

@@ -1,14 +1,19 @@
 from html.parser import HTMLParser
+from typing import override
 
 from ambientweather2sqlite.units_mapping import Units
 
+type LiveData = dict[str, int | float | None]
+type LabelMap = dict[str, str]
+
 
 class DisabledInputParser(HTMLParser):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.filtered_values = {}
+        self.filtered_values: LiveData = {}
 
-    def handle_starttag(self, tag, attrs):
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "input":
             # Convert attrs list to dict for easier access
             attr_dict = dict(attrs)
@@ -28,7 +33,7 @@ class DisabledInputParser(HTMLParser):
                         self.filtered_values[name] = None
 
 
-def extract_values(html_content: str) -> dict[str, float | None]:
+def extract_values(html_content: str) -> LiveData:
     """Extracts values from disabled input fields in HTML content.
 
     Args:
@@ -49,16 +54,17 @@ class LabeledInputParser(HTMLParser):
     labels from the livedata.htm file.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.in_td = False
         self.is_label_cell = False
         self.row_cell_count = 0
         self.current_label = ""
-        self.current_row_inputs = []
-        self.data_dict: dict[str, str] = {}
+        self.current_row_inputs: list[str] = []
+        self.data_dict: LabelMap = {}
 
-    def handle_starttag(self, tag, attrs):
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         # Reset row-specific state when a new table row starts
         if tag == "tr":
             self.row_cell_count = 0
@@ -76,15 +82,17 @@ class LabeledInputParser(HTMLParser):
         # If we find an input tag, extract its name
         elif tag == "input" and not self.is_label_cell:
             attrs_dict = dict(attrs)
-            if "name" in attrs_dict:
-                self.current_row_inputs.append(attrs_dict["name"])
+            if input_name := attrs_dict.get("name"):
+                self.current_row_inputs.append(input_name)
 
-    def handle_data(self, data):
+    @override
+    def handle_data(self, data: str) -> None:
         # If we are inside the first td of a row, capture the text as a label
         if self.in_td and self.is_label_cell:
             self.current_label += data.strip()
 
-    def handle_endtag(self, tag):
+    @override
+    def handle_endtag(self, tag: str) -> None:
         if tag == "td":
             self.in_td = False
             # Once we leave the first cell, the next ones are not labels
@@ -98,7 +106,7 @@ class LabeledInputParser(HTMLParser):
                     self.data_dict[input_name] = self.current_label
 
 
-def extract_labels(html_content: str) -> dict[str, str]:
+def extract_labels(html_content: str) -> LabelMap:
     """Parses the HTML content from livedata.htm to extract input names
     and their corresponding labels using Python's html.parser.
 
@@ -125,13 +133,13 @@ class UnitsHTMLParser(HTMLParser):
 
     def __init__(self, *, convert_charrefs: bool = True) -> None:
         super().__init__(convert_charrefs=convert_charrefs)
-        # pyrefly: ignore  # bad-argument-type
         self._all_unit_values = {member.value for member in Units}
         self._is_in_unit_label_div = False
         self._is_in_selected_option = False
         self._current_unit_label: str | None = None
         self.extracted_units: dict[Units, str] = {}
 
+    @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Processes start tags to identify relevant sections and selected options."""
         attributes = dict(attrs)
@@ -145,6 +153,7 @@ class UnitsHTMLParser(HTMLParser):
             if "selected" in attributes:
                 self._is_in_selected_option = True
 
+    @override
     def handle_endtag(self, tag: str) -> None:
         """Processes end tags to reset state flags."""
         if tag == "div":
@@ -155,6 +164,7 @@ class UnitsHTMLParser(HTMLParser):
         elif tag == "select" and self._current_unit_label:
             self._current_unit_label = None
 
+    @override
     def handle_data(self, data: str) -> None:
         """Processes the text content within tags to extract labels and values."""
         # If inside a unit label div, check if the text corresponds to a
@@ -169,7 +179,6 @@ class UnitsHTMLParser(HTMLParser):
                 unit_enum_member = next(
                     (
                         member
-                        # pyrefly: ignore  # bad-argument-type
                         for member in Units
                         if member.value == self._current_unit_label
                     ),
