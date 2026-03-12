@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from ambientweather2sqlite.database import (
@@ -47,7 +48,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         self.assertTrue(Path(self.db_path).exists())
 
         # Verify observations table was created
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='observations'",
@@ -69,7 +70,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         """Test that observations table has correct structure."""
         create_database_if_not_exists(self.db_path)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(observations)")
             columns = cursor.fetchall()
@@ -91,7 +92,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         insert_observation(self.db_path, test_data)
 
         # Verify data was inserted
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM observations")
             count = cursor.fetchone()[0]
@@ -109,7 +110,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         insert_observation(self.db_path, test_data)
 
         # Verify columns were created
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(observations)")
             columns = cursor.fetchall()
@@ -132,7 +133,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
             insert_observation(self.db_path, data)
 
         # Verify all data was inserted
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM observations")
             count = cursor.fetchone()[0]
@@ -151,7 +152,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         insert_observation(self.db_path, test_data)
 
         # Verify data was inserted and columns were sanitized
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(observations)")
             columns = cursor.fetchall()
