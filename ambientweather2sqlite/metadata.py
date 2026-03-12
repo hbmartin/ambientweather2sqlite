@@ -1,17 +1,21 @@
 import json
 from http.client import HTTPException
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
 from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_labels, extract_units
 from ambientweather2sqlite.units_mapping import units_for_columns
 
+if TYPE_CHECKING:
+    from ambientweather2sqlite.models import ColumnUnitMap, LabelMap
+
 
 def create_metadata(
     database_path: str,
     live_data_url: str,
-) -> tuple[dict[str, str], dict[str, str]]:
+) -> tuple[LabelMap, ColumnUnitMap]:
     _database_path = Path(database_path)
     path = _database_path.parent / f"{_database_path.stem}_metadata.json"
     try:

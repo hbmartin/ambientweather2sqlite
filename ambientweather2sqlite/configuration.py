@@ -24,7 +24,7 @@ def _optional_int(config_data: dict[str, object], key: str) -> int | None:
     value = config_data.get(key)
     if value is None:
         return None
-    if not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise _config_type_error(key, "an integer")
     return value
 
@@ -75,7 +75,9 @@ def create_config_file(config_path: str | Path | None) -> Path:
     ).strip()
 
     output_file = (
-        _CURRENT_PATH / _DEFAULT_CONFIG_NAME if config_path is None else Path(config_path)
+        _CURRENT_PATH / _DEFAULT_CONFIG_NAME
+        if config_path is None
+        else Path(config_path)
     )
     if config_path is None:
         output_path_input = input(

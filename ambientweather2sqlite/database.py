@@ -1,9 +1,9 @@
 import re
 import sqlite3
-from collections.abc import Mapping
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from .exceptions import (
@@ -17,15 +17,18 @@ from .exceptions import (
     UnexpectedEmptyDictionaryError,
 )
 
+if TYPE_CHECKING:
+    from .models import (
+        AggregatedRow,
+        AggregationField,
+        HourlyAggregatedData,
+        Observation,
+    )
+
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _SQLITE_MMAP_SIZE_BYTES = 268_435_456
-type AggregationField = tuple[str, str, str]
-type AggregatedRow = dict[str, str | int | float | None]
-type HourlyAggregatedData = dict[str, list[AggregatedRow | None]]
-type ObservationValue = str | int | float | None
-type Observation = Mapping[str, ObservationValue]
 
 
 def _column_name(text: str) -> str:

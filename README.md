@@ -35,15 +35,21 @@ Requires Python 3.14+.
 ## Setup
 
 ```bash
-ambientweather2sqlite [<port>] [<config_path>]
+ambientweather2sqlite [--port PORT] [--config CONFIG_PATH]
 ```
 
-Both arguments are optional and can be provided in any order:
+Both flags are optional:
 
-| Argument | Type | Default | Description |
+| Flag | Type | Default | Description |
 |----------|------|---------|-------------|
-| `<port>` | Integer | Config file value, or disabled | Port number for the HTTP JSON API server. Overrides the `port` value in the config file. |
-| `<config_path>` | String | `./aw2sqlite.toml`, then `~/.aw2sqlite.toml` | Path to a TOML config file. Uses it if it exists; otherwise setup writes a new file there. If omitted, searches the default locations. |
+| `--port PORT` | Integer | Config file value, or disabled | Port number for the HTTP JSON API server. Overrides the `port` value in the config file. |
+| `--config CONFIG_PATH` | String | `./aw2sqlite.toml`, then `~/.aw2sqlite.toml` | Path to a TOML config file. Uses it if it exists; otherwise setup writes a new file there. If omitted, searches the default locations. |
+
+Example:
+
+```bash
+ambientweather2sqlite --port 8080 --config ./aw2sqlite.toml
+```
 
 On the first run, if no config file is found, you will be guided through an interactive setup wizard that prompts for:
 
@@ -63,7 +69,7 @@ port = 8080  # optional, omit to disable the JSON server
 ```
 
 Config file lookup order:
-1. Path provided as CLI argument
+1. Path provided via `--config`
 2. `./aw2sqlite.toml` in the current directory
 3. `~/.aw2sqlite.toml` in the home directory
 

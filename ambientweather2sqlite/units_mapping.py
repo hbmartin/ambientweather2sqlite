@@ -1,7 +1,8 @@
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
-type LabelMap = dict[str, str]
-type ColumnUnitMap = dict[str, str]
+if TYPE_CHECKING:
+    from .models import ColumnUnitMap, LabelMap
 
 
 class Units(StrEnum):
@@ -13,6 +14,7 @@ class Units(StrEnum):
     PM2_5 = "PM2.5"
     HUMIDITY = "Humidity"
     WIND_DIRECTION = "Wind Direction"
+
 
 LABEL_TO_UNIT: dict[str, Units] = {
     "gust": Units.WIND,
@@ -59,11 +61,14 @@ def units_for_columns(
         labels_with_units[column] = label
         for substr, unit in LABEL_TO_UNIT.items():
             if substr.lower() in label.lower():
+                raw_unit = units.get(unit)
+                if raw_unit is None:
+                    break
                 column_to_unit[column] = AW_UNIT_TO_PINT_UNIT.get(
-                    units[unit],
-                    units[unit],
+                    raw_unit,
+                    raw_unit,
                 )
-                labels_with_units[column] = f"{label} ({units[unit]})"
+                labels_with_units[column] = f"{label} ({raw_unit})"
                 break
 
     return labels_with_units, column_to_unit

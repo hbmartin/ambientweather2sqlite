@@ -291,8 +291,10 @@ class TestDatabaseTimezone(TestCase):
 
         self.assertIn("2025-11-02", result)
         self.assertIsNone(result["2025-11-02"][0])
-        self.assertEqual(result["2025-11-02"][1]["count"], 2)
-        self.assertEqual(result["2025-11-02"][1]["avg_outTemp"], 51.0)
+        repeated_hour = result["2025-11-02"][1]
+        self.assertIsNotNone(repeated_hour)
+        self.assertEqual(repeated_hour["count"], 2)
+        self.assertEqual(repeated_hour["avg_outTemp"], 51.0)
 
     def test_timezone_affects_aggregation_results(self):
         """Test that different timezones can produce different results"""

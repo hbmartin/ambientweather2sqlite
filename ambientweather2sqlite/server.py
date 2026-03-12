@@ -3,7 +3,7 @@ import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import override
+from typing import Any, cast, override
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneError
@@ -12,13 +12,12 @@ from . import mureq
 from .awparser import extract_labels, extract_values
 from .database import query_daily_aggregated_data, query_hourly_aggregated_data
 from .models import (
+    QueryParams,
     build_daily_aggregated_payload,
     build_error_payload,
     build_hourly_aggregated_payload,
     build_live_data_payload,
 )
-
-type QueryParams = dict[str, list[str]]
 
 
 def _tz_from_query(query: QueryParams) -> str:
@@ -31,14 +30,20 @@ def create_request_handler(  # noqa: C901
     live_data_url: str,
     db_path: str,
 ) -> type[BaseHTTPRequestHandler]:
+    log_path = Path(db_path).parent / f"{Path(db_path).stem}_server.log"
+
     class JSONHandler(BaseHTTPRequestHandler):
         LIVE_DATA_URL = live_data_url
         DB_PATH = db_path
-        LOG_PATH = Path(db_path).parent / f"{Path(db_path).stem}_server.log"
-        _logger: logging.Logger = logging.getLogger(f"{__name__}.JSONHandler")
+        LOG_PATH = log_path
+        _logger: logging.Logger = logging.getLogger(
+            f"{__name__}.JSONHandler.{LOG_PATH}",
+        )
 
         @classmethod
         def setup_logger(cls) -> None:
+            if cls._logger.handlers:
+                return
             # Prevent propagation to root logger to avoid console output
             cls._logger.propagate = False
             handler = logging.FileHandler(cls.LOG_PATH)
@@ -49,6 +54,16 @@ def create_request_handler(  # noqa: C901
             )
             cls._logger.addHandler(handler)
             cls._logger.setLevel(logging.INFO)
+
+        @classmethod
+        def teardown_logger(cls) -> None:
+            for handler in list(cls._logger.handlers):
+                cls._logger.removeHandler(handler)
+                handler.close()
+
+        @classmethod
+        def log_handler_count(cls) -> int:
+            return len(cls._logger.handlers)
 
         @override
         def log_message(self, format: str, *args: object) -> None:
@@ -173,9 +188,11 @@ def create_request_handler(  # noqa: C901
 
 class Server:
     def __init__(self, live_data_url: str, db_path: str, port: int, host: str):
+        handler_class = create_request_handler(live_data_url, db_path)
+        self._teardown_logger = cast("Any", handler_class).teardown_logger
         self.httpd = HTTPServer(
             (host, port),
-            create_request_handler(live_data_url, db_path),
+            handler_class,
         )
         self.server_thread = threading.Thread(
             target=self.httpd.serve_forever,
@@ -189,3 +206,4 @@ class Server:
         self.httpd.shutdown()
         self.httpd.server_close()
         self.server_thread.join()
+        self._teardown_logger()

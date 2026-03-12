@@ -1,10 +1,10 @@
 from html.parser import HTMLParser
-from typing import override
+from typing import TYPE_CHECKING, override
 
-from ambientweather2sqlite.units_mapping import Units
+from .units_mapping import Units
 
-type LiveData = dict[str, int | float | None]
-type LabelMap = dict[str, str]
+if TYPE_CHECKING:
+    from .models import LabelMap, LiveData
 
 
 class DisabledInputParser(HTMLParser):
