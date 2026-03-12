@@ -4,24 +4,35 @@ version = "0.7.0"
 description = "A project to record weather observations from an AmbientWeather station over the local network - no API needed!"
 readme = "README.md"
 license = "GPL-3.0-or-later"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = []
 authors = [
     { name = "Harold Martin", email = "Harold.Martin@gmail.com" },
 ]
-keywords = ["ambientweather", "ambient", "sqlite", "tweather"]
+keywords = ["ambientweather", "ambient", "sqlite", "weather", "weather-station", "datasette", "iot", "home-automation", "climate", "temperature", "humidity", "barometer", "sensor"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Framework :: Datasette",
     "Intended Audience :: End Users/Desktop",
     "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/harold-martin/ambientweather2sqlite"
+Repository = "https://github.com/harold-martin/ambientweather2sqlite"
+Issues = "https://github.com/harold-martin/ambientweather2sqlite/issues"
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
 
 [project.scripts]
 ambientweather2sqlite = "ambientweather2sqlite.__main__:main"
@@ -29,11 +40,20 @@ ambientweather2sqlite = "ambientweather2sqlite.__main__:main"
 [dependency-groups]
 dev = [
     "black>=25.1.0",
+    "codecov>=2.1.13",
     "pyrefly>=0.24.2",
     "pytest>=8.0.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.12.4",
     "ty>=0.0.1a10",
 ]
+
+[tool.coverage.run]
+relative_files = true
+
+[tool.black]
+line-length = 88
+target-version = ["py314"]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -42,7 +62,7 @@ exclude = [".bzr", ".direnv", ".eggs", ".git", ".git-rewrite", ".hg", ".ipynb_ch
 # Same as Black.
 line-length = 88
 indent-width = 4
-target-version = "py311"
+target-version = "py314"
 
 lint.select = ["ALL"]
 lint.ignore = ["ANN204", "D100", "D101", "D103", "D104", "D107", "D203", "D205", "D213", "D401", "DTZ005", "EM101", "T201"]

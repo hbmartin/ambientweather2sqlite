@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
@@ -274,7 +275,7 @@ class TestDatabaseTimezone(TestCase):
         # Insert data at timezone boundary
         boundary_time = f"{self.today} 23:30:00"
 
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO observations (ts, outTemp) VALUES (?, ?)",

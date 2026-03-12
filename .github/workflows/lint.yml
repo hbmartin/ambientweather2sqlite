@@ -1,30 +1,65 @@
 name: Lint and Test
-on: push
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
 
 jobs:
   lint-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.14"]
+
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: pip
-        cache-dependency-path: requirements-dev.txt
-        allow-prereleases: true
-    - run: pip install -r requirements-dev.txt
-    - run: ruff check ambientweather2sqlite
-    - name: Run type checks
-      run: |
-        ty --version
-        ty check ambientweather2sqlite
-        pyrefly --version
-        pyrefly check ambientweather2sqlite
-    - uses: psf/black@stable
-      with:
-        options: "--check --verbose"
-    - run: pytest
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: |
+          uv sync --dev
+
+      - name: Run Black check
+        run: |
+          uv run black --check ambientweather2sqlite
+
+      - name: Run Ruff check
+        run: |
+          uv run ruff check ambientweather2sqlite
+
+      - name: Run Pyrefly check
+        run: |
+          uv run pyrefly check ambientweather2sqlite
+      - name: Run ty check
+        run: |
+          uv run ty check ambientweather2sqlite
+      - name: Run tests
+        run: |
+          uv run pytest tests/ --cov=ambientweather2sqlite --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          disable_search: true
+          fail_ci_if_error: true
+          root_dir: .
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true

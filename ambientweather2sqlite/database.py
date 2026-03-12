@@ -1,5 +1,6 @@
 import re
 import sqlite3
+from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -180,7 +181,7 @@ def _fetch_rows_for_zoneinfo_range(
         f"WHERE {_TS_COL} >= ? AND {_TS_COL} < ? ORDER BY {_TS_COL}"
     )
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor().execute(query, (start_ts, end_ts))
         return cursor.fetchall()
@@ -333,7 +334,7 @@ def create_database_if_not_exists(
     if Path(db_path).exists():
         return False
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         cursor = conn.cursor()
 
         table_schema = f"""
@@ -388,7 +389,7 @@ def _insert_dict_row(
 
 
 def insert_observation(db_path: str, observation: dict[str, float | None]) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         _ensure_columns(conn, set(observation.keys()))
         _insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
 
@@ -444,7 +445,7 @@ def query_daily_aggregated_data(
     ORDER BY date
     """
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor().execute(query)
         return [dict(row) for row in cursor]
@@ -513,7 +514,7 @@ def query_hourly_aggregated_data(
     ORDER BY date, hour
     """
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor().execute(query, params)
         result = {}
