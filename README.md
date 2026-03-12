@@ -40,7 +40,7 @@ The optional web server provides live data access and aggregation endpoints:
 
 - **`/`** - Live weather data
 - **`/daily`** - Daily aggregated data  
-- **`/hourly`** - Hourly aggregated data for a specific date
+- **`/hourly`** - Hourly aggregated data for a date or date range
 
 ### Daily Aggregation
 
@@ -58,14 +58,17 @@ Examples:
 ### Hourly Aggregation
 
 Query parameters:
-- `date` - Date in YYYY-MM-DD format (required)
+- `start_date` - Start date in YYYY-MM-DD format (required)
+- `end_date` - End date in YYYY-MM-DD format (optional, defaults to today)
+- `date` - Backward-compatible alias for `start_date`
 - `q` - Aggregation fields
 - `tz` - Timezone for timestamp conversion (required)
 
 Examples:
 ```
-/hourly?date=2025-06-27&tz=America/Chicago&q=avg_outHumi
-/hourly?date=2025-06-27&tz=%2B05%3A30&q=max_gustspeed
+/hourly?start_date=2025-06-27&tz=America/Chicago&q=avg_outHumi
+/hourly?start_date=2025-06-26&end_date=2025-06-27&tz=%2B05%3A30&q=max_gustspeed
+/hourly?date=2025-06-27&tz=UTC&q=avg_outHumi
 ```
 
 ### Timezone Support
