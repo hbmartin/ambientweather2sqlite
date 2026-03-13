@@ -514,6 +514,12 @@ def _insert_dict_row(
     )
     cursor.execute(query, values)
     conn.commit()
+    if cursor.rowcount <= 0:
+        _logger.debug(
+            "Ignored insert into %s because the row already exists",
+            table_name,
+        )
+        return None
     return cursor.lastrowid
 
 

@@ -100,10 +100,13 @@ def scan_port80(
 
     """
     network = ipaddress.ip_network(subnet, strict=False)
+    if not isinstance(network, ipaddress.IPv4Network):
+        msg = "Only IPv4 subnets are supported"
+        raise TypeError(msg)
     open_hosts: list[str] = []
 
     def check_host(
-        ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+        ip: ipaddress.IPv4Address,
     ) -> str | None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
@@ -149,7 +152,11 @@ def scan_for_stations(subnet: str | None = None) -> list[str]:
 
     """
     if subnet is None:
-        subnet = detect_local_subnet()
+        try:
+            subnet = detect_local_subnet()
+        except (OSError, ValueError) as exc:
+            print(f"Unable to auto-detect local subnet: {exc}")
+            return []
 
     print(f"Scanning {subnet} for devices with port 80 open...")
     open_hosts = scan_port80(subnet)

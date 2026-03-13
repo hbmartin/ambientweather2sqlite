@@ -1,4 +1,5 @@
 import io
+import json
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import TestCase
@@ -189,3 +190,59 @@ class TestMainConfig(TestCase):
             config_path,
             overwrite_existing=True,
         )
+
+
+class TestMainStatus(TestCase):
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.__main__.query_db_metrics")
+    @patch("ambientweather2sqlite.__main__.load_config")
+    @patch("ambientweather2sqlite.__main__.create_config_file")
+    @patch("ambientweather2sqlite.__main__.get_config_path")
+    def test_main_status_prints_metrics(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_query_db_metrics: Mock,
+        mock_print: Mock,
+    ):
+        config_path = Path("config.toml")
+        metrics = {
+            "row_count": 1,
+            "db_file_size_bytes": 512,
+            "earliest_ts": "2026-01-01 12:00:00",
+            "latest_ts": "2026-01-01 12:00:00",
+            "column_count": 3,
+        }
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_query_db_metrics.return_value = metrics
+
+        with patch("ambientweather2sqlite.__main__.Path.exists", return_value=True):
+            main(["status"])
+
+        mock_query_db_metrics.assert_called_once_with("weather.db")
+        mock_print.assert_called_once_with(json.dumps(metrics, indent=2))
+
+
+class TestMainInstallLaunchd(TestCase):
+    @patch("ambientweather2sqlite.launchd.install_launchd")
+    @patch("ambientweather2sqlite.__main__.create_config_file")
+    @patch("ambientweather2sqlite.__main__.get_config_path")
+    def test_main_install_launchd_calls_handler(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_install_launchd: Mock,
+    ):
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+
+        main(["install-launchd"])
+
+        mock_install_launchd.assert_called_once_with(config_path)

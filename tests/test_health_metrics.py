@@ -2,12 +2,12 @@
 
 import json
 import logging
-import socket
 import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from unittest import TestCase
+from urllib.error import URLError
 from urllib.request import urlopen
 
 from ambientweather2sqlite.database import (
@@ -183,9 +183,9 @@ class TestServerHealthMetrics(TestCase):
         deadline = time.monotonic() + timeout
         while True:
             try:
-                with socket.create_connection(("127.0.0.1", self.port), timeout=0.1):
+                if self._get_json("/health")["status"] == "ok":
                     return
-            except OSError:
+            except OSError, URLError, json.JSONDecodeError, KeyError:
                 if time.monotonic() >= deadline:
                     self.fail("Server not ready")
                 time.sleep(0.01)

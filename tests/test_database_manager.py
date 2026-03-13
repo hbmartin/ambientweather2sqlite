@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ambientweather2sqlite.database import (
     _column_name,
+    _insert_dict_row,
     create_database_if_not_exists,
     insert_observation,
 )
@@ -181,6 +182,24 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(remaining_temp, 72.0)
         self.assertTrue(any(index[2] for index in indexes))
+
+    def test_insert_dict_row_returns_none_when_duplicate_is_ignored(self):
+        create_database_if_not_exists(self.db_path)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute("ALTER TABLE observations ADD COLUMN outTemp REAL")
+            first_rowid = _insert_dict_row(
+                conn,
+                "observations",
+                {"ts": "2026-01-01 12:00:00", "outTemp": 70.0},
+            )
+            second_rowid = _insert_dict_row(
+                conn,
+                "observations",
+                {"ts": "2026-01-01 12:00:00", "outTemp": 72.0},
+            )
+
+        self.assertIsNotNone(first_rowid)
+        self.assertIsNone(second_rowid)
 
     def test_insert_observation_with_special_column_names(self):
         """Test insertion with column names requiring sanitization."""

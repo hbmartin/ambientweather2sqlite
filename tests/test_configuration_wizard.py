@@ -263,3 +263,22 @@ class TestCreateConfigFile(TestCase):
 
             content = result.read_text(encoding="utf-8")
             self.assertIn("http://192.168.0.20/livedata.htm", content)
+
+    @patch("ambientweather2sqlite.scanner.scan_for_stations")
+    @patch("builtins.input")
+    def test_falls_back_to_manual_url_when_auto_scan_fails(self, mock_input, mock_scan):
+        mock_scan.side_effect = OSError("offline")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "aw2sqlite.toml"
+            mock_input.side_effect = [
+                "y",  # Auto-scan
+                "http://192.168.0.99/livedata.htm",  # Manual URL after fallback
+                str(Path(temp_dir) / "test.db"),  # DB path
+                "",  # No port
+                str(output_path),  # Output file
+            ]
+
+            result = create_config_file(None)
+
+            content = result.read_text(encoding="utf-8")
+            self.assertIn("http://192.168.0.99/livedata.htm", content)
