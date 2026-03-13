@@ -11,22 +11,24 @@ from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
 
 
+def _is_non_loopback_ipv4(address: object) -> bool:
+    return isinstance(address, str) and not address.startswith("127.")
+
+
+def _ipv4_candidate(sockaddr: object) -> str | None:
+    if not isinstance(sockaddr, tuple) or not sockaddr:
+        return None
+
+    candidate = sockaddr[0]
+    return candidate if _is_non_loopback_ipv4(candidate) else None
+
+
 def _non_loopback_ipv4_candidates() -> list[str]:
-    def ipv4_candidate(sockaddr: object) -> str | None:
-        if not isinstance(sockaddr, tuple) or not sockaddr:
-            return None
-
-        candidate = sockaddr[0]
-        if not isinstance(candidate, str) or candidate.startswith("127."):
-            return None
-
-        return candidate
-
     try:
         _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
     except OSError:
         addresses = []
-    candidates = [address for address in addresses if not address.startswith("127.")]
+    candidates = [address for address in addresses if _is_non_loopback_ipv4(address)]
     if candidates:
         return candidates
 
@@ -42,7 +44,7 @@ def _non_loopback_ipv4_candidates() -> list[str]:
     candidates.extend(
         candidate
         for address_info in addrinfos
-        if (candidate := ipv4_candidate(address_info[4])) is not None
+        if (candidate := _ipv4_candidate(address_info[4])) is not None
     )
 
     return list(dict.fromkeys(candidates))
@@ -182,7 +184,7 @@ def probe_weather_station(ip: str) -> str | None:
         values = extract_values(body)
         if values:
             return url
-    except TimeoutError, HTTPException, OSError:
+    except (TimeoutError, HTTPException, OSError):
         pass
     return None
 

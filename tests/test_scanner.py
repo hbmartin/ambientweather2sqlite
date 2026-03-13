@@ -1,9 +1,12 @@
+from http.client import HTTPException
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 from ambientweather2sqlite.scanner import (
     _detect_local_ip,
     _detect_prefix_length,
+    _ipv4_candidate,
+    _is_non_loopback_ipv4,
     detect_local_subnet,
     probe_weather_station,
     scan_for_stations,
@@ -125,6 +128,20 @@ class TestDetectLocalIp(TestCase):
         mock_getaddrinfo.assert_called_once()
 
 
+class TestIpv4Helpers(TestCase):
+    def test_is_non_loopback_ipv4_filters_loopback_and_non_strings(self):
+        self.assertTrue(_is_non_loopback_ipv4("192.168.1.42"))
+        self.assertFalse(_is_non_loopback_ipv4("127.0.0.1"))
+        self.assertFalse(_is_non_loopback_ipv4(None))
+
+    def test_ipv4_candidate_returns_only_non_loopback_ipv4_strings(self):
+        self.assertEqual(_ipv4_candidate(("10.0.0.5", 0)), "10.0.0.5")
+        self.assertIsNone(_ipv4_candidate(("127.0.0.1", 0)))
+        self.assertIsNone(_ipv4_candidate((1234, 0)))
+        self.assertIsNone(_ipv4_candidate(()))
+        self.assertIsNone(_ipv4_candidate("10.0.0.5"))
+
+
 class TestDetectPrefixLength(TestCase):
     @patch("ambientweather2sqlite.scanner.subprocess.run")
     def test_preserves_zero_prefix_length(self, mock_run):
@@ -189,6 +206,14 @@ class TestProbeWeatherStation(TestCase):
     @patch("ambientweather2sqlite.scanner.mureq.get")
     def test_returns_none_on_timeout(self, mock_get):
         mock_get.side_effect = TimeoutError
+
+        result = probe_weather_station("192.168.1.10")
+
+        self.assertIsNone(result)
+
+    @patch("ambientweather2sqlite.scanner.mureq.get")
+    def test_returns_none_on_http_exception(self, mock_get):
+        mock_get.side_effect = HTTPException("bad response")
 
         result = probe_weather_station("192.168.1.10")
 
