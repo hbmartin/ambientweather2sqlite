@@ -126,8 +126,13 @@ def create_config_file(
     *,
     overwrite_existing: bool = False,
 ) -> Path:
-    if not overwrite_existing and config_path is not None and Path(config_path).exists():
-        return Path(config_path)
+    output_path = (
+        _CURRENT_PATH / _DEFAULT_CONFIG_NAME
+        if config_path is None
+        else Path(config_path)
+    )
+    if not overwrite_existing and output_path.exists():
+        return output_path
 
     print("Configuration Setup")
     print("-" * 20)
@@ -143,22 +148,16 @@ def create_config_file(
         "Enter port number to server JSON data (leave blank to disable):\n",
     ).strip()
 
-    output_file = (
-        _CURRENT_PATH / _DEFAULT_CONFIG_NAME
-        if config_path is None
-        else Path(config_path)
-    )
     if config_path is None:
         output_path_input = input(
-            f"Enter output TOML filename (leave blank for default: {output_file}):\n",
+            f"Enter output TOML filename (leave blank for default: {output_path}):\n",
         ).strip()
         if output_path_input:
-            output_file = Path(output_path_input)
+            output_path = Path(output_path_input)
 
     config = f'live_data_url = "{ambient_url}"\ndatabase_path = "{database_path}"\n'
     if port:
         config += f"port = {port}\n"
-    output_path = Path(output_file)
     if not overwrite_existing and output_path.exists():
         return output_path
     output_path.write_text(config, encoding="utf-8")
