@@ -10,7 +10,12 @@ from ambientweather2sqlite.exceptions import Aw2SqliteError, InvalidTimezoneErro
 
 from . import mureq
 from .awparser import extract_labels, extract_values
-from .database import query_daily_aggregated_data, query_hourly_aggregated_data
+from .database import (
+    query_daily_aggregated_data,
+    query_db_metrics,
+    query_hourly_aggregated_data,
+    query_latest_timestamp,
+)
 from .models import (
     QueryParams,
     build_daily_aggregated_payload,
@@ -170,17 +175,42 @@ def create_request_handler(  # noqa: C901
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 500)
 
+        def _send_health(self) -> None:
+            try:
+                latest_ts = query_latest_timestamp(self.DB_PATH)
+                metrics = query_db_metrics(self.DB_PATH)
+                self._send_json(
+                    {
+                        "status": "ok",
+                        "last_observation_ts": latest_ts,
+                        "row_count": metrics["row_count"],
+                    },
+                )
+            except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
+                self._send_json(build_error_payload(str(e)), 500)
+
+        def _send_metrics(self) -> None:
+            try:
+                self._send_json(query_db_metrics(self.DB_PATH))
+            except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
+                self._send_json(build_error_payload(str(e)), 500)
+
         def do_GET(self) -> None:
-            # Only serve data for the root path
-            if self.path == "/":
-                self._send_live_data()
-            elif self.path.startswith("/daily"):
-                self._send_daily_aggregated_data()
-            elif self.path.startswith("/hourly"):
-                self._send_hourly_aggregated_data()
-            else:
-                self._send_json(build_error_payload("Not found"), 404)
-                return
+            match self.path.split("?")[0]:
+                case "/":
+                    self._send_live_data()
+                case "/daily":
+                    self._send_daily_aggregated_data()
+                case "/hourly":
+                    self._send_hourly_aggregated_data()
+                case "/health":
+                    self._send_health()
+                case "/metrics":
+                    self._send_metrics()
+                case _:
+                    self._send_json(build_error_payload("Not found"), 404)
 
     JSONHandler.setup_logger()
     return JSONHandler

@@ -29,12 +29,24 @@ def _optional_int(config_data: dict[str, object], key: str) -> int | None:
     return value
 
 
+def _optional_str(
+    config_data: dict[str, object],
+    key: str,
+    default: str,
+) -> str:
+    value = config_data.get(key, default)
+    if not isinstance(value, str):
+        raise _config_type_error(key, "a string")
+    return value
+
+
 def load_config(config_path: Path) -> AppConfig:
     config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     return AppConfig(
         live_data_url=_require_str(config_data, "live_data_url"),
         database_path=_require_str(config_data, "database_path"),
         port=_optional_int(config_data, "port"),
+        log_format=_optional_str(config_data, "log_format", "text"),
     )
 
 
@@ -48,6 +60,40 @@ def get_config_path() -> Path | None:
     return None
 
 
+def _prompt_for_url() -> str:
+    """Prompt for a live data URL, with an option to auto-scan the network."""
+    scan_choice = input(
+        "Would you like to auto-scan your network for a weather station? [Y/n]: ",
+    ).strip()
+
+    if scan_choice.lower() != "n":
+        from .scanner import scan_for_stations
+
+        stations = scan_for_stations()
+        if stations:
+            if len(stations) == 1:
+                print(f"Using discovered station: {stations[0]}")
+                return stations[0]
+            print("\nMultiple stations found:")
+            for i, url in enumerate(stations, 1):
+                print(f"  {i}. {url}")
+            while True:
+                choice = input("Select a station number: ").strip()
+                if choice.isdigit() and 1 <= int(choice) <= len(stations):
+                    return stations[int(choice) - 1]
+        else:
+            retry = input("Scan again? [y/N]: ").strip()
+            if retry.lower() == "y":
+                return _prompt_for_url()
+
+    ambient_url = ""
+    while not ambient_url.startswith("http"):
+        ambient_url = input(
+            "Enter AmbientWeather Live Data URL: (e.g. http://192.168.0.226/livedata.htm)\n",
+        ).strip()
+    return ambient_url
+
+
 def create_config_file(config_path: str | Path | None) -> Path:
     if (
         config_path is not None
@@ -59,11 +105,7 @@ def create_config_file(config_path: str | Path | None) -> Path:
     print("Configuration Setup")
     print("-" * 20)
 
-    ambient_url = ""
-    while not ambient_url.startswith("http"):
-        ambient_url = input(
-            "Enter AmbientWeather Live Data URL: (e.g. http://192.168.0.226/livedata.htm)\n",
-        ).strip()
+    ambient_url = _prompt_for_url()
 
     database_path = input(
         f"Enter Database Path (leave blank for default: {_CURRENT_PATH / _DEFAULT_DATABASE_NAME}):\n",

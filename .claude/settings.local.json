@@ -1,24 +1,26 @@
 {
-	"permissions": {
-		"allow": [
-			"Bash(uv run pytest tests/test_database_manager.py -v)",
-			"Bash(source:*)",
-			"Bash(uv run:*)",
-			"Bash(uv run pytest tests/test_server.py -v)"
-		],
-		"deny": []
-	},
-	"hooks": {
-		"PostToolUse": [
-			{
-				"matcher": "Edit|Write",
-				"hooks": [
-					{
-						"type": "command",
-						"command": "uv run black ."
-					}
-				]
-			}
-		]
-	}
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest tests/test_database_manager.py -v)",
+      "Bash(source:*)",
+      "Bash(uv run:*)",
+      "Bash(uv run pytest tests/test_server.py -v)",
+      "WebFetch(domain:docs.datasette.io)",
+      "Bash(uv sync:*)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run black ."
+          }
+        ]
+      }
+    ]
+  }
 }

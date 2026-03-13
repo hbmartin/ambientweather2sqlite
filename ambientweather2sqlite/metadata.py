@@ -31,12 +31,22 @@ def create_metadata(
         print(f"Error fetching metadata labels: {e}")
         return {}, {}
     metadata = {
+        "title": "AmbientWeather Observations",
+        "description": (
+            "Weather observations collected from a local AmbientWeather station."
+        ),
+        "license": "GPL-3.0-or-later",
+        "license_url": "https://www.gnu.org/licenses/gpl-3.0.html",
         "databases": {
             _database_path.stem: {
+                "source": "AmbientWeather Station",
                 "source_url": live_data_url,
+                "about": "ambientweather2sqlite",
                 "about_url": "https://github.com/hbmartin/ambientweather2sqlite",
                 "tables": {
                     "observations": {
+                        "description": "Minute-by-minute weather sensor readings.",
+                        "sort_desc": "ts",
                         "columns": labels,
                         "units": column_to_unit,
                     },

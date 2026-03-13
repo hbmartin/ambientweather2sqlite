@@ -120,13 +120,13 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
             self.assertIn("anotherColumn", column_names)
 
     def test_insert_multiple_observations(self):
-        """Test inserting multiple observations."""
+        """Test inserting multiple observations with distinct timestamps."""
         create_database_if_not_exists(self.db_path)
 
         test_data_list = [
-            {"outTemp": 75.0, "outHumi": 60.0},
-            {"outTemp": 77.0, "outHumi": 58.0},
-            {"outTemp": 79.0, "outHumi": 55.0},
+            {"ts": "2026-01-01 12:00:00", "outTemp": 75.0, "outHumi": 60.0},
+            {"ts": "2026-01-01 12:01:00", "outTemp": 77.0, "outHumi": 58.0},
+            {"ts": "2026-01-01 12:02:00", "outTemp": 79.0, "outHumi": 55.0},
         ]
 
         for data in test_data_list:
