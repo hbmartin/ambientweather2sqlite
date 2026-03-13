@@ -58,7 +58,9 @@ def _prepare_observation(
     observation: Observation,
 ) -> dict[str, str | int | float | None]:
     prepared = dict(observation)
-    prepared.setdefault(_TS_COL, _current_observation_timestamp())
+    ts_value = prepared.get(_TS_COL)
+    if not isinstance(ts_value, str) or not ts_value.strip():
+        prepared[_TS_COL] = _current_observation_timestamp()
     return prepared
 
 
@@ -206,11 +208,11 @@ def _normalize_hourly_date_range(
     timezone: str | ZoneInfo,
 ) -> tuple[date, date]:
     start_date_obj = _parse_query_date(start_date)
-    end_date_obj = (
-        _parse_query_date(end_date)
-        if end_date is not None
-        else _current_date_for_timezone(timezone)
-    )
+    if end_date is None:
+        candidate_end_date = _current_date_for_timezone(timezone)
+        end_date_obj = max(candidate_end_date, start_date_obj)
+    else:
+        end_date_obj = _parse_query_date(end_date)
 
     if end_date_obj < start_date_obj:
         raise InvalidDateRangeError(

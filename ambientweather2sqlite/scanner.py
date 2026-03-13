@@ -11,10 +11,46 @@ from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
 
 
+def _non_loopback_ipv4_candidates() -> list[str]:
+    try:
+        _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
+    except OSError:
+        addresses = []
+    candidates = [
+        address for address in addresses if not address.startswith("127.")
+    ]
+    if candidates:
+        return candidates
+
+    try:
+        addrinfos = socket.getaddrinfo(
+            socket.gethostname(),
+            None,
+            family=socket.AF_INET,
+        )
+    except OSError:
+        addrinfos = []
+
+    candidates.extend(
+        address_info[4][0]
+        for address_info in addrinfos
+        if not address_info[4][0].startswith("127.")
+    )
+
+    return list(dict.fromkeys(candidates))
+
+
 def _detect_local_ip() -> str:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except OSError:
+        for candidate in _non_loopback_ipv4_candidates():
+            return candidate
+
+    msg = "Unable to detect local IPv4 address"
+    raise RuntimeError(msg)
 
 
 def _prefix_length_from_ifconfig(output: str, local_ip: str) -> int | None:
@@ -68,7 +104,7 @@ def _detect_prefix_length(local_ip: str) -> int | None:
         ):
             continue
 
-        if prefix_length := parser(result.stdout):
+        if (prefix_length := parser(result.stdout)) is not None:
             return prefix_length
 
     return None
@@ -77,7 +113,9 @@ def _detect_prefix_length(local_ip: str) -> int | None:
 def detect_local_subnet() -> str:
     """Detect the local subnet by finding the machine's default route IP."""
     local_ip = _detect_local_ip()
-    prefix_length = _detect_prefix_length(local_ip) or 24
+    prefix_length = _detect_prefix_length(local_ip)
+    if prefix_length is None:
+        prefix_length = 24
     network = ipaddress.ip_network(f"{local_ip}/{prefix_length}", strict=False)
     return str(network)
 
@@ -156,7 +194,7 @@ def scan_for_stations(subnet: str | None = None) -> list[str]:
             subnet = detect_local_subnet()
         except (OSError, ValueError) as exc:
             print(f"Unable to auto-detect local subnet: {exc}")
-            return []
+            raise
 
     print(f"Scanning {subnet} for devices with port 80 open...")
     open_hosts = scan_port80(subnet)

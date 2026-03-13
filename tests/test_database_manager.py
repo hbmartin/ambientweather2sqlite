@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from ambientweather2sqlite.database import (
     _column_name,
@@ -143,16 +144,54 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
     def test_insert_observation_without_ts_uses_unique_precise_timestamps(self):
         create_database_if_not_exists(self.db_path)
 
-        insert_observation(self.db_path, {"outTemp": 75.0})
-        insert_observation(self.db_path, {"outTemp": 76.0})
+        with patch(
+            "ambientweather2sqlite.database._current_observation_timestamp",
+            side_effect=[
+                "2026-01-01 12:00:00.000001",
+                "2026-01-01 12:00:00.000002",
+            ],
+        ):
+            insert_observation(self.db_path, {"outTemp": 75.0})
+            insert_observation(self.db_path, {"outTemp": 76.0})
 
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*), COUNT(DISTINCT ts) FROM observations")
-            count, distinct_ts = cursor.fetchone()
+            cursor.execute("SELECT ts FROM observations ORDER BY ts")
+            timestamps = [row[0] for row in cursor.fetchall()]
 
-        self.assertEqual(count, 2)
-        self.assertEqual(distinct_ts, 2)
+        self.assertEqual(
+            timestamps,
+            [
+                "2026-01-01 12:00:00.000001",
+                "2026-01-01 12:00:00.000002",
+            ],
+        )
+
+    def test_insert_observation_normalizes_invalid_ts_values(self):
+        create_database_if_not_exists(self.db_path)
+
+        with patch(
+            "ambientweather2sqlite.database._current_observation_timestamp",
+            side_effect=[
+                "2026-01-01 12:00:00.000010",
+                "2026-01-01 12:00:00.000011",
+            ],
+        ):
+            insert_observation(self.db_path, {"ts": None, "outTemp": 75.0})
+            insert_observation(self.db_path, {"ts": "   ", "outTemp": 76.0})
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ts FROM observations ORDER BY ts")
+            timestamps = [row[0] for row in cursor.fetchall()]
+
+        self.assertEqual(
+            timestamps,
+            [
+                "2026-01-01 12:00:00.000010",
+                "2026-01-01 12:00:00.000011",
+            ],
+        )
 
     def test_create_database_migrates_duplicate_timestamps(self):
         with closing(sqlite3.connect(self.db_path)) as conn:

@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -104,15 +105,15 @@ class TestDaemonIntegration(TestCase):
             time.sleep(0.2)
         return False
 
-    def _run_single_cycle_daemon(self) -> None:
-        try:
-            start_daemon(
-                self.live_data_url,
-                self.db_path,
-                period_seconds=1,
-            )
-        except SystemExit as exc:
-            self.assertEqual(exc.code, 0)
+    def _run_single_cycle_daemon(self) -> tuple[ThreadPoolExecutor, Future[None]]:
+        executor = ThreadPoolExecutor(max_workers=1)
+        daemon_future = executor.submit(
+            start_daemon,
+            self.live_data_url,
+            self.db_path,
+            period_seconds=1,
+        )
+        return executor, daemon_future
 
     def test_daemon_single_cycle_inserts_observation(self):
         """Run the daemon for a single cycle and verify data is inserted."""
@@ -120,15 +121,21 @@ class TestDaemonIntegration(TestCase):
             "ambientweather2sqlite.daemon.wait_for_next_update",
             side_effect=KeyboardInterrupt,
         ):
-            daemon_thread = threading.Thread(
-                target=self._run_single_cycle_daemon,
-            )
-            daemon_thread.start()
+            executor, daemon_future = self._run_single_cycle_daemon()
             row_observed = self._wait_for_row_count()
-            daemon_thread.join(timeout=2)
+            daemon_exit = None
+            try:
+                daemon_future.result(timeout=2)
+            except SystemExit as exc:
+                daemon_exit = exc
+            finally:
+                executor.shutdown(wait=True)
 
         self.assertTrue(row_observed)
-        self.assertFalse(daemon_thread.is_alive())
+        self.assertTrue(daemon_future.done())
+        self.assertIsInstance(daemon_exit, SystemExit)
+        if isinstance(daemon_exit, SystemExit):
+            self.assertEqual(daemon_exit.code, 0)
 
         # Verify the inserted data has expected columns
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -147,15 +154,21 @@ class TestDaemonIntegration(TestCase):
             "ambientweather2sqlite.daemon.wait_for_next_update",
             side_effect=KeyboardInterrupt,
         ):
-            daemon_thread = threading.Thread(
-                target=self._run_single_cycle_daemon,
-            )
-            daemon_thread.start()
+            executor, daemon_future = self._run_single_cycle_daemon()
             row_observed = self._wait_for_row_count()
-            daemon_thread.join(timeout=2)
+            daemon_exit = None
+            try:
+                daemon_future.result(timeout=2)
+            except SystemExit as exc:
+                daemon_exit = exc
+            finally:
+                executor.shutdown(wait=True)
 
         self.assertTrue(row_observed)
-        self.assertFalse(daemon_thread.is_alive())
+        self.assertTrue(daemon_future.done())
+        self.assertIsInstance(daemon_exit, SystemExit)
+        if isinstance(daemon_exit, SystemExit):
+            self.assertEqual(daemon_exit.code, 0)
 
         result = query_daily_aggregated_data(
             db_path=self.db_path,

@@ -169,6 +169,52 @@ class TestCreateConfigFile(TestCase):
             self.assertIn("http://192.168.0.99/livedata.htm", content)
 
     @patch("builtins.input")
+    def test_returns_existing_default_path_without_overwriting(self, mock_input):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            current_path = Path(temp_dir)
+            config_path = current_path / "aw2sqlite.toml"
+            config_path.write_text("existing", encoding="utf-8")
+            mock_input.side_effect = [
+                "n",
+                "http://192.168.0.99/livedata.htm",
+                str(current_path / "replacement.db"),
+                "",
+                "",
+            ]
+
+            with patch(
+                "ambientweather2sqlite.configuration._CURRENT_PATH",
+                current_path,
+            ):
+                result = create_config_file(None)
+
+            self.assertEqual(result, config_path)
+            self.assertEqual(result.read_text(encoding="utf-8"), "existing")
+
+    @patch("builtins.input")
+    def test_returns_existing_prompted_path_without_overwriting(self, mock_input):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            current_path = Path(temp_dir)
+            output_path = current_path / "existing.toml"
+            output_path.write_text("existing", encoding="utf-8")
+            mock_input.side_effect = [
+                "n",
+                "http://192.168.0.99/livedata.htm",
+                str(current_path / "replacement.db"),
+                "",
+                str(output_path),
+            ]
+
+            with patch(
+                "ambientweather2sqlite.configuration._CURRENT_PATH",
+                current_path,
+            ):
+                result = create_config_file(None)
+
+            self.assertEqual(result, output_path)
+            self.assertEqual(result.read_text(encoding="utf-8"), "existing")
+
+    @patch("builtins.input")
     def test_creates_config_file_with_manual_url(self, mock_input):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "aw2sqlite.toml"
@@ -264,10 +310,14 @@ class TestCreateConfigFile(TestCase):
             content = result.read_text(encoding="utf-8")
             self.assertIn("http://192.168.0.20/livedata.htm", content)
 
-    @patch("ambientweather2sqlite.scanner.scan_for_stations")
     @patch("builtins.input")
-    def test_falls_back_to_manual_url_when_auto_scan_fails(self, mock_input, mock_scan):
-        mock_scan.side_effect = OSError("offline")
+    @patch("ambientweather2sqlite.scanner.detect_local_subnet")
+    def test_falls_back_to_manual_url_when_auto_scan_fails(
+        self,
+        mock_detect,
+        mock_input,
+    ):
+        mock_detect.side_effect = OSError("offline")
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "aw2sqlite.toml"
             mock_input.side_effect = [

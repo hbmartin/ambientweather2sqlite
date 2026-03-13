@@ -126,13 +126,8 @@ def create_config_file(
     *,
     overwrite_existing: bool = False,
 ) -> Path:
-    if (
-        not overwrite_existing
-        and config_path is not None
-        and (output_path := Path(config_path))
-        and output_path.exists()
-    ):
-        return output_path
+    if not overwrite_existing and config_path is not None and Path(config_path).exists():
+        return Path(config_path)
 
     print("Configuration Setup")
     print("-" * 20)
@@ -164,6 +159,8 @@ def create_config_file(
     if port:
         config += f"port = {port}\n"
     output_path = Path(output_file)
+    if not overwrite_existing and output_path.exists():
+        return output_path
     output_path.write_text(config, encoding="utf-8")
 
     return output_path

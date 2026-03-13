@@ -2,6 +2,8 @@ from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 from ambientweather2sqlite.scanner import (
+    _detect_local_ip,
+    _detect_prefix_length,
     detect_local_subnet,
     probe_weather_station,
     scan_for_stations,
@@ -35,6 +37,100 @@ class TestDetectLocalSubnet(TestCase):
             ),
         ):
             self.assertEqual(detect_local_subnet(), "192.168.16.0/20")
+
+    def test_respects_zero_prefix_length(self):
+        with (
+            patch(
+                "ambientweather2sqlite.scanner._detect_prefix_length",
+                return_value=0,
+            ),
+            patch(
+                "ambientweather2sqlite.scanner._detect_local_ip",
+                return_value="192.168.16.42",
+            ),
+        ):
+            self.assertEqual(detect_local_subnet(), "0.0.0.0/0")
+
+
+class TestDetectLocalIp(TestCase):
+    @patch("ambientweather2sqlite.scanner.socket.getaddrinfo")
+    @patch("ambientweather2sqlite.scanner.socket.gethostbyname_ex")
+    @patch("ambientweather2sqlite.scanner.socket.socket")
+    def test_falls_back_to_hostname_lookup_when_route_probe_fails(
+        self,
+        mock_socket_cls,
+        mock_gethostbyname_ex,
+        mock_getaddrinfo,
+    ):
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = OSError("no route")
+        mock_socket_cls.return_value.__enter__.return_value = mock_sock
+        mock_socket_cls.return_value.__exit__.return_value = False
+        mock_gethostbyname_ex.return_value = (
+            "host",
+            [],
+            ["127.0.0.1", "192.168.1.42"],
+        )
+
+        self.assertEqual(_detect_local_ip(), "192.168.1.42")
+        mock_getaddrinfo.assert_not_called()
+
+    @patch("ambientweather2sqlite.scanner.socket.getaddrinfo")
+    @patch("ambientweather2sqlite.scanner.socket.gethostbyname_ex")
+    @patch("ambientweather2sqlite.scanner.socket.socket")
+    def test_falls_back_to_getaddrinfo_when_hostname_lookup_is_loopback_only(
+        self,
+        mock_socket_cls,
+        mock_gethostbyname_ex,
+        mock_getaddrinfo,
+    ):
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = OSError("no route")
+        mock_socket_cls.return_value.__enter__.return_value = mock_sock
+        mock_socket_cls.return_value.__exit__.return_value = False
+        mock_gethostbyname_ex.return_value = ("host", [], ["127.0.0.1"])
+        mock_getaddrinfo.return_value = [
+            (
+                2,
+                1,
+                6,
+                "",
+                ("10.0.0.5", 0),
+            ),
+        ]
+
+        self.assertEqual(_detect_local_ip(), "10.0.0.5")
+
+    @patch("ambientweather2sqlite.scanner.socket.getaddrinfo", return_value=[])
+    @patch(
+        "ambientweather2sqlite.scanner.socket.gethostbyname_ex",
+        return_value=("host", [], ["127.0.0.1"]),
+    )
+    @patch("ambientweather2sqlite.scanner.socket.socket")
+    def test_raises_when_no_non_loopback_ipv4_is_available(
+        self,
+        mock_socket_cls,
+        mock_gethostbyname_ex,
+        mock_getaddrinfo,
+    ):
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = OSError("no route")
+        mock_socket_cls.return_value.__enter__.return_value = mock_sock
+        mock_socket_cls.return_value.__exit__.return_value = False
+
+        with self.assertRaisesRegex(RuntimeError, "Unable to detect local IPv4 address"):
+            _detect_local_ip()
+
+        mock_gethostbyname_ex.assert_called_once()
+        mock_getaddrinfo.assert_called_once()
+
+
+class TestDetectPrefixLength(TestCase):
+    @patch("ambientweather2sqlite.scanner.subprocess.run")
+    def test_preserves_zero_prefix_length(self, mock_run):
+        mock_run.return_value.stdout = "2: en0    inet 192.168.1.42/0 brd 192.168.1.255"
+
+        self.assertEqual(_detect_prefix_length("192.168.1.42"), 0)
 
 
 class TestScanPort80(TestCase):
@@ -121,9 +217,8 @@ class TestScanForStations(TestCase):
         self.assertEqual(result, [])
 
     @patch("ambientweather2sqlite.scanner.detect_local_subnet")
-    def test_returns_empty_when_subnet_autodetect_fails(self, mock_detect):
+    def test_raises_when_subnet_autodetect_fails(self, mock_detect):
         mock_detect.side_effect = OSError("no route")
 
-        result = scan_for_stations()
-
-        self.assertEqual(result, [])
+        with self.assertRaisesRegex(OSError, "no route"):
+            scan_for_stations()
