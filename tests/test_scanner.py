@@ -118,7 +118,7 @@ class TestDetectLocalIp(TestCase):
         mock_socket_cls.return_value.__enter__.return_value = mock_sock
         mock_socket_cls.return_value.__exit__.return_value = False
 
-        with self.assertRaisesRegex(RuntimeError, "Unable to detect local IPv4 address"):
+        with self.assertRaisesRegex(OSError, "Unable to detect local IPv4 address"):
             _detect_local_ip()
 
         mock_gethostbyname_ex.assert_called_once()

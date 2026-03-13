@@ -12,13 +12,21 @@ from ambientweather2sqlite.awparser import extract_values
 
 
 def _non_loopback_ipv4_candidates() -> list[str]:
+    def ipv4_candidate(sockaddr: object) -> str | None:
+        if not isinstance(sockaddr, tuple) or not sockaddr:
+            return None
+
+        candidate = sockaddr[0]
+        if not isinstance(candidate, str) or candidate.startswith("127."):
+            return None
+
+        return candidate
+
     try:
         _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
     except OSError:
         addresses = []
-    candidates = [
-        address for address in addresses if not address.startswith("127.")
-    ]
+    candidates = [address for address in addresses if not address.startswith("127.")]
     if candidates:
         return candidates
 
@@ -32,9 +40,9 @@ def _non_loopback_ipv4_candidates() -> list[str]:
         addrinfos = []
 
     candidates.extend(
-        address_info[4][0]
+        candidate
         for address_info in addrinfos
-        if not address_info[4][0].startswith("127.")
+        if (candidate := ipv4_candidate(address_info[4])) is not None
     )
 
     return list(dict.fromkeys(candidates))
@@ -50,7 +58,7 @@ def _detect_local_ip() -> str:
             return candidate
 
     msg = "Unable to detect local IPv4 address"
-    raise RuntimeError(msg)
+    raise OSError(msg)
 
 
 def _prefix_length_from_ifconfig(output: str, local_ip: str) -> int | None:
