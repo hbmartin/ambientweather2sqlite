@@ -1,3 +1,5 @@
+import io
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -56,6 +58,20 @@ class TestParseArgs(TestCase):
         args = parse_args(["install-launchd"])
 
         self.assertEqual(args.command, "install-launchd")
+
+    def test_top_level_help_lists_subcommands(self):
+        stdout = io.StringIO()
+
+        with (
+            self.assertRaises(SystemExit),
+            redirect_stdout(stdout),
+        ):
+            parse_args(["--help"])
+
+        help_output = stdout.getvalue()
+        self.assertIn("config", help_output)
+        self.assertIn("once", help_output)
+        self.assertIn("install-launchd", help_output)
 
 
 class TestMainServe(TestCase):
@@ -159,3 +175,17 @@ class TestMainOnce(TestCase):
         main(["once"])
 
         mock_fetch_once.assert_called_once_with("http://127.0.0.1/livedata.htm")
+
+
+class TestMainConfig(TestCase):
+    @patch("ambientweather2sqlite.__main__.create_config_file")
+    def test_main_config_overwrites_existing_file(self, mock_create_config_file: Mock):
+        config_path = Path("config.toml")
+        mock_create_config_file.return_value = config_path
+
+        main(["config", "--config", str(config_path)])
+
+        mock_create_config_file.assert_called_once_with(
+            config_path,
+            overwrite_existing=True,
+        )

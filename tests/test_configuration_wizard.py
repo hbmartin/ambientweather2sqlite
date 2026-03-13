@@ -82,6 +82,19 @@ class TestLoadConfig(TestCase):
             with self.assertRaises(TypeError):
                 load_config(config_path)
 
+    def test_load_config_rejects_unknown_log_format(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "test.toml"
+            config_path.write_text(
+                'live_data_url = "http://192.168.0.1/livedata.htm"\n'
+                'database_path = "/tmp/test.db"\n'
+                'log_format = "yaml"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                load_config(config_path)
+
 
 class TestOptionalStr(TestCase):
     def test_returns_default_when_missing(self):
@@ -136,6 +149,24 @@ class TestCreateConfigFile(TestCase):
             result = create_config_file(config_path)
 
             self.assertEqual(result, config_path)
+
+    @patch("builtins.input")
+    def test_overwrites_existing_path_when_requested(self, mock_input):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "existing.toml"
+            config_path.write_text("test", encoding="utf-8")
+            mock_input.side_effect = [
+                "n",
+                "http://192.168.0.99/livedata.htm",
+                str(Path(temp_dir) / "replacement.db"),
+                "",
+            ]
+
+            result = create_config_file(config_path, overwrite_existing=True)
+
+            self.assertEqual(result, config_path)
+            content = result.read_text(encoding="utf-8")
+            self.assertIn("http://192.168.0.99/livedata.htm", content)
 
     @patch("builtins.input")
     def test_creates_config_file_with_manual_url(self, mock_input):

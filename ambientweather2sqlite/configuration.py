@@ -6,6 +6,7 @@ from .models import AppConfig
 _CURRENT_PATH = Path.cwd()
 _DEFAULT_CONFIG_NAME = "aw2sqlite.toml"
 _DEFAULT_DATABASE_NAME = "aw2sqlite.db"
+_VALID_LOG_FORMATS = frozenset({"text", "json"})
 
 
 def _config_type_error(key: str, expected_type: str) -> TypeError:
@@ -40,13 +41,22 @@ def _optional_str(
     return value
 
 
+def _optional_log_format(config_data: dict[str, object]) -> str:
+    value = _optional_str(config_data, "log_format", "text")
+    if value not in _VALID_LOG_FORMATS:
+        valid_formats = ", ".join(sorted(_VALID_LOG_FORMATS))
+        msg = f"log_format must be one of: {valid_formats}"
+        raise ValueError(msg)
+    return value
+
+
 def load_config(config_path: Path) -> AppConfig:
     config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     return AppConfig(
         live_data_url=_require_str(config_data, "live_data_url"),
         database_path=_require_str(config_data, "database_path"),
         port=_optional_int(config_data, "port"),
-        log_format=_optional_str(config_data, "log_format", "text"),
+        log_format=_optional_log_format(config_data),
     )
 
 
@@ -94,9 +104,14 @@ def _prompt_for_url() -> str:
     return ambient_url
 
 
-def create_config_file(config_path: str | Path | None) -> Path:
+def create_config_file(
+    config_path: str | Path | None,
+    *,
+    overwrite_existing: bool = False,
+) -> Path:
     if (
-        config_path is not None
+        not overwrite_existing
+        and config_path is not None
         and (output_path := Path(config_path))
         and output_path.exists()
     ):

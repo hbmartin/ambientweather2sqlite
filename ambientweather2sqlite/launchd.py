@@ -3,6 +3,7 @@
 import shutil
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 _PLIST_TEMPLATE = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -14,10 +15,7 @@ _PLIST_TEMPLATE = """\
     <string>com.ambientweather2sqlite</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{executable}</string>
-        <string>serve</string>
-        <string>--config</string>
-        <string>{config_path}</string>
+{program_arguments}
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -34,20 +32,34 @@ _PLIST_TEMPLATE = """\
 _LABEL = "com.ambientweather2sqlite"
 
 
-def _find_executable() -> str:
-    """Find the ambientweather2sqlite executable path."""
-    if exe := shutil.which("ambientweather2sqlite"):
-        return exe
-    return sys.executable
+def _program_arguments(config_path: Path) -> list[str]:
+    """Build a launchd command that works with both scripts and Python runtimes."""
+    for executable_name in ("aw2sqlite", "ambientweather2sqlite"):
+        if executable_path := shutil.which(executable_name):
+            return [executable_path, "serve", "--config", str(config_path.resolve())]
+
+    return [
+        sys.executable,
+        "-m",
+        "ambientweather2sqlite",
+        "serve",
+        "--config",
+        str(config_path.resolve()),
+    ]
+
+
+def _render_program_arguments(program_arguments: list[str]) -> str:
+    return "\n".join(
+        f"        <string>{escape(argument)}</string>" for argument in program_arguments
+    )
 
 
 def generate_plist(config_path: Path) -> str:
     """Generate a launchd plist XML string."""
     log_dir = Path.home() / "Library" / "Logs"
     return _PLIST_TEMPLATE.format(
-        executable=_find_executable(),
-        config_path=config_path.resolve(),
-        log_dir=log_dir,
+        program_arguments=_render_program_arguments(_program_arguments(config_path)),
+        log_dir=escape(str(log_dir)),
     )
 
 

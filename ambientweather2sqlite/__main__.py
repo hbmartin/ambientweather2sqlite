@@ -8,6 +8,7 @@ from .daemon import fetch_once, start_daemon
 from .database import create_database_if_not_exists, query_db_metrics
 
 _SUBCOMMANDS = {"serve", "config", "once", "status", "install-launchd"}
+_TOP_LEVEL_HELP_FLAGS = {"-h", "--help"}
 
 
 def _add_config_arg(parser: argparse.ArgumentParser) -> None:
@@ -22,8 +23,14 @@ def _add_config_arg(parser: argparse.ArgumentParser) -> None:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_args = argv if argv is not None else sys.argv[1:]
 
-    # Default to serve when no subcommand is given
-    if not raw_args or raw_args[0] not in _SUBCOMMANDS:
+    # Default bare flags to serve for backward compatibility.
+    if not raw_args:
+        raw_args = ["serve"]
+    elif (
+        raw_args[0] not in _SUBCOMMANDS
+        and raw_args[0].startswith("-")
+        and raw_args[0] not in _TOP_LEVEL_HELP_FLAGS
+    ):
         raw_args = ["serve", *raw_args]
 
     parser = argparse.ArgumentParser(
@@ -101,7 +108,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
 def _cmd_config(args: argparse.Namespace) -> None:
     config_path = args.config_path
-    created_path = create_config_file(config_path)
+    created_path = create_config_file(config_path, overwrite_existing=True)
     print(f"Configuration saved to {created_path}")
 
 

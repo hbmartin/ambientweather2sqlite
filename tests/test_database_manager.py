@@ -139,6 +139,49 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
             count = cursor.fetchone()[0]
             self.assertEqual(count, len(test_data_list))
 
+    def test_insert_observation_without_ts_uses_unique_precise_timestamps(self):
+        create_database_if_not_exists(self.db_path)
+
+        insert_observation(self.db_path, {"outTemp": 75.0})
+        insert_observation(self.db_path, {"outTemp": 76.0})
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*), COUNT(DISTINCT ts) FROM observations")
+            count, distinct_ts = cursor.fetchone()
+
+        self.assertEqual(count, 2)
+        self.assertEqual(distinct_ts, 2)
+
+    def test_create_database_migrates_duplicate_timestamps(self):
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("CREATE TABLE observations (ts TIMESTAMP, outTemp REAL)")
+            cursor.executemany(
+                "INSERT INTO observations (ts, outTemp) VALUES (?, ?)",
+                [
+                    ("2026-01-01 12:00:00", 70.0),
+                    ("2026-01-01 12:00:00", 72.0),
+                ],
+            )
+            conn.commit()
+
+        was_created = create_database_if_not_exists(self.db_path)
+
+        self.assertFalse(was_created)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM observations")
+            count = cursor.fetchone()[0]
+            cursor.execute("SELECT outTemp FROM observations")
+            remaining_temp = cursor.fetchone()[0]
+            cursor.execute("PRAGMA index_list(observations)")
+            indexes = cursor.fetchall()
+
+        self.assertEqual(count, 1)
+        self.assertEqual(remaining_temp, 72.0)
+        self.assertTrue(any(index[2] for index in indexes))
+
     def test_insert_observation_with_special_column_names(self):
         """Test insertion with column names requiring sanitization."""
         create_database_if_not_exists(self.db_path)
