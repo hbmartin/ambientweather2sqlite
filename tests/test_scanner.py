@@ -64,6 +64,10 @@ class TestScanPort80(TestCase):
 
         self.assertEqual(result, [])
 
+    def test_rejects_ipv6_subnets(self):
+        with self.assertRaisesRegex(TypeError, "Only IPv4 subnets are supported"):
+            scan_port80("2001:db8::/126")
+
 
 class TestProbeWeatherStation(TestCase):
     @patch("ambientweather2sqlite.scanner.extract_values")
@@ -113,5 +117,13 @@ class TestScanForStations(TestCase):
         mock_scan.return_value = []
 
         result = scan_for_stations("192.168.1.0/24")
+
+        self.assertEqual(result, [])
+
+    @patch("ambientweather2sqlite.scanner.detect_local_subnet")
+    def test_returns_empty_when_subnet_autodetect_fails(self, mock_detect):
+        mock_detect.side_effect = OSError("no route")
+
+        result = scan_for_stations()
 
         self.assertEqual(result, [])

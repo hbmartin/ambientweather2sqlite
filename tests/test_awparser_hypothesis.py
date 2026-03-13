@@ -1,5 +1,6 @@
 """Property-based tests for awparser.py using Hypothesis."""
 
+from html import escape
 from unittest import TestCase
 
 from hypothesis import given, settings
@@ -9,13 +10,16 @@ from ambientweather2sqlite.awparser import extract_labels, extract_values
 
 
 def _make_disabled_input(name: str, value: str) -> str:
-    return f'<input name="{name}" value="{value}" disabled>'
+    return (
+        f'<input name="{escape(name, quote=True)}" '
+        f'value="{escape(value, quote=True)}" disabled>'
+    )
 
 
 def _make_labeled_row(label: str, name: str, value: str) -> str:
     return (
-        f"<tr><td>{label}</td><td>"
-        f'<input name="{name}" value="{value}" disabled>'
+        f"<tr><td>{escape(label)}</td><td>"
+        f"{_make_disabled_input(name, value)}"
         f"</td></tr>"
     )
 

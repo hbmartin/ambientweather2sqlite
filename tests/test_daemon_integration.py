@@ -9,6 +9,7 @@ from contextlib import closing
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 from ambientweather2sqlite.daemon import fetch_once, start_daemon
 from ambientweather2sqlite.database import (
@@ -92,29 +93,42 @@ class TestDaemonIntegration(TestCase):
         for suffix in ["_metadata.json", "_daemon.log", "_server.log"]:
             (db_dir / f"{db_stem}{suffix}").unlink(missing_ok=True)
 
-    def test_daemon_single_cycle_inserts_observation(self):
-        """Run the daemon for a single cycle and verify data is inserted."""
-        daemon_thread = threading.Thread(
-            target=start_daemon,
-            args=(self.live_data_url, self.db_path),
-            kwargs={"period_seconds": 1},
-            daemon=True,
-        )
-        daemon_thread.start()
-
-        # Wait for at least one observation to be inserted
-        deadline = time.monotonic() + 5
-        row_count = 0
+    def _wait_for_row_count(self, minimum: int = 1, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with closing(sqlite3.connect(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT COUNT(*) FROM observations")
-                row_count = cursor.fetchone()[0]
-                if row_count >= 1:
-                    break
+                if cursor.fetchone()[0] >= minimum:
+                    return True
             time.sleep(0.2)
+        return False
 
-        self.assertGreaterEqual(row_count, 1)
+    def _run_single_cycle_daemon(self) -> None:
+        try:
+            start_daemon(
+                self.live_data_url,
+                self.db_path,
+                period_seconds=1,
+            )
+        except SystemExit as exc:
+            self.assertEqual(exc.code, 0)
+
+    def test_daemon_single_cycle_inserts_observation(self):
+        """Run the daemon for a single cycle and verify data is inserted."""
+        with patch(
+            "ambientweather2sqlite.daemon.wait_for_next_update",
+            side_effect=KeyboardInterrupt,
+        ):
+            daemon_thread = threading.Thread(
+                target=self._run_single_cycle_daemon,
+            )
+            daemon_thread.start()
+            row_observed = self._wait_for_row_count()
+            daemon_thread.join(timeout=2)
+
+        self.assertTrue(row_observed)
+        self.assertFalse(daemon_thread.is_alive())
 
         # Verify the inserted data has expected columns
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -129,23 +143,19 @@ class TestDaemonIntegration(TestCase):
 
     def test_daemon_data_is_queryable_via_aggregation(self):
         """Verify the full pipeline: daemon inserts -> aggregation query works."""
-        daemon_thread = threading.Thread(
-            target=start_daemon,
-            args=(self.live_data_url, self.db_path),
-            kwargs={"period_seconds": 1},
-            daemon=True,
-        )
-        daemon_thread.start()
+        with patch(
+            "ambientweather2sqlite.daemon.wait_for_next_update",
+            side_effect=KeyboardInterrupt,
+        ):
+            daemon_thread = threading.Thread(
+                target=self._run_single_cycle_daemon,
+            )
+            daemon_thread.start()
+            row_observed = self._wait_for_row_count()
+            daemon_thread.join(timeout=2)
 
-        # Wait for data
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            with closing(sqlite3.connect(self.db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM observations")
-                if cursor.fetchone()[0] >= 1:
-                    break
-            time.sleep(0.2)
+        self.assertTrue(row_observed)
+        self.assertFalse(daemon_thread.is_alive())
 
         result = query_daily_aggregated_data(
             db_path=self.db_path,

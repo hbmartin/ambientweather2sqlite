@@ -70,38 +70,55 @@ def get_config_path() -> Path | None:
     return None
 
 
-def _prompt_for_url() -> str:
-    """Prompt for a live data URL, with an option to auto-scan the network."""
-    scan_choice = input(
-        "Would you like to auto-scan your network for a weather station? [Y/n]: ",
-    ).strip()
+def _prompt_for_discovered_station(stations: list[str]) -> str:
+    if len(stations) == 1:
+        print(f"Using discovered station: {stations[0]}")
+        return stations[0]
 
-    if scan_choice.lower() != "n":
-        from .scanner import scan_for_stations
+    print("\nMultiple stations found:")
+    for i, url in enumerate(stations, 1):
+        print(f"  {i}. {url}")
 
-        stations = scan_for_stations()
-        if stations:
-            if len(stations) == 1:
-                print(f"Using discovered station: {stations[0]}")
-                return stations[0]
-            print("\nMultiple stations found:")
-            for i, url in enumerate(stations, 1):
-                print(f"  {i}. {url}")
-            while True:
-                choice = input("Select a station number: ").strip()
-                if choice.isdigit() and 1 <= int(choice) <= len(stations):
-                    return stations[int(choice) - 1]
-        else:
-            retry = input("Scan again? [y/N]: ").strip()
-            if retry.lower() == "y":
-                return _prompt_for_url()
+    while True:
+        choice = input("Select a station number: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(stations):
+            return stations[int(choice) - 1]
 
+
+def _prompt_manual_url() -> str:
     ambient_url = ""
     while not ambient_url.startswith("http"):
         ambient_url = input(
             "Enter AmbientWeather Live Data URL: (e.g. http://192.168.0.226/livedata.htm)\n",
         ).strip()
     return ambient_url
+
+
+def _prompt_for_url() -> str:
+    """Prompt for a live data URL, with an option to auto-scan the network."""
+    while True:
+        scan_choice = input(
+            "Would you like to auto-scan your network for a weather station? [Y/n]: ",
+        ).strip()
+
+        if scan_choice.lower() == "n":
+            break
+
+        from .scanner import scan_for_stations
+
+        try:
+            stations = scan_for_stations()
+        except (OSError, ValueError) as exc:
+            print(f"Auto-scan failed: {exc}")
+            break
+
+        if stations:
+            return _prompt_for_discovered_station(stations)
+        retry = input("Scan again? [y/N]: ").strip()
+        if retry.lower() != "y":
+            break
+
+    return _prompt_manual_url()
 
 
 def create_config_file(
