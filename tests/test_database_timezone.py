@@ -4,6 +4,7 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from ambientweather2sqlite.database import (
@@ -239,6 +240,23 @@ class TestDatabaseTimezone(TestCase):
             start_date=str(self.tomorrow),
             end_date=str(self.tomorrow),
             tz="America/New_York",
+        )
+
+        self.assertEqual(result, {str(self.tomorrow): [None] * 24})
+
+    @patch("ambientweather2sqlite.database._current_date_for_timezone")
+    def test_query_hourly_aggregated_data_clamps_implicit_end_date_to_start_date(
+        self,
+        mock_current_date,
+    ):
+        """Test omitted end_date does not fail when fixed offsets lag behind UTC."""
+        mock_current_date.return_value = self.today
+
+        result = query_hourly_aggregated_data(
+            db_path=self.db_path,
+            aggregation_fields=["avg_outTemp"],
+            start_date=str(self.tomorrow),
+            tz="-08:00",
         )
 
         self.assertEqual(result, {str(self.tomorrow): [None] * 24})
