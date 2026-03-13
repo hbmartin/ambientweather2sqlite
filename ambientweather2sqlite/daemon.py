@@ -14,6 +14,43 @@ from .database import insert_observation
 from .metadata import create_metadata
 
 
+class _JsonFormatter(logging.Formatter):
+    """Format log records as single-line JSON (JSONL)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict[str, object] = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry)
+
+
+def _configure_logging(
+    log_path: Path,
+    *,
+    log_format: str = "text",
+) -> logging.Logger:
+    """Set up file logging with the requested format."""
+    logger = logging.getLogger("ambientweather2sqlite")
+    logger.setLevel(logging.INFO)
+
+    handler = logging.FileHandler(str(log_path))
+    if log_format == "json":
+        handler.setFormatter(_JsonFormatter())
+    else:
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            ),
+        )
+    logger.addHandler(handler)
+    return logger
+
+
 def clear_lines(n: int) -> None:
     for _ in range(n):
         print("\033[A\033[K", end="")
@@ -25,34 +62,39 @@ def wait_for_next_update(period_seconds: int) -> None:
         time.sleep(1)
 
 
+def fetch_once(live_data_url: str) -> None:
+    """Fetch a single observation and print it without writing to the DB."""
+    try:
+        body = mureq.get(live_data_url)
+        live_data = extract_values(body)
+    except TimeoutError:
+        print("Error: Weather station timed out.", file=sys.stderr)
+        sys.exit(1)
+    except HTTPException as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(live_data, indent=4))
+
+
 def start_daemon(
     live_data_url: str,
     database_path: str,
     *,
     port: int | None = None,
     period_seconds: int = 60,
+    log_format: str = "text",
 ) -> None:
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")
 
     log_path = Path(database_path).parent / f"{Path(database_path).stem}_daemon.log"
-
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler(str(log_path))],
-    )
-    logger = logging.getLogger(__name__)
-
-    def log_message(message: str) -> None:
-        logger.info(message)
+    logger = _configure_logging(log_path, log_format=log_format)
 
     labels: dict[str, str] = {}
     try:
         labels, _ = create_metadata(database_path, live_data_url)
     except (HTTPException, TimeoutError) as e:
-        log_message(f"{type(e).__name__}\n{e}")
+        logger.info("%s\n%s", type(e).__name__, e)
         print(f"Error fetching metadata: {e}")
 
     server = None
@@ -71,12 +113,12 @@ def start_daemon(
                 body = mureq.get(live_data_url)
                 live_data = extract_values(body)
             except TimeoutError:
-                log_message("TimeoutError")
+                logger.info("TimeoutError")
                 print("Warming up weather station's server...")
                 remove_newlines = 1
                 continue
             except HTTPException as e:
-                log_message(f"{type(e).__name__}\n{e}")
+                logger.info("%s\n%s", type(e).__name__, e)
                 print(f"Error fetching live data: {e}")
                 remove_newlines = 1
                 wait_for_next_update(period_seconds)

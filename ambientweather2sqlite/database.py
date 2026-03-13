@@ -1,3 +1,4 @@
+import logging
 import re
 import sqlite3
 from contextlib import closing
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from .models import (
         AggregatedRow,
         AggregationField,
+        DbMetrics,
         HourlyAggregatedData,
         Observation,
     )
@@ -29,6 +31,39 @@ _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _SQLITE_MMAP_SIZE_BYTES = 268_435_456
+
+_logger = logging.getLogger(__name__)
+
+# Generous bounds for sensor value validation (column_substring -> (min, max))
+_SENSOR_BOUNDS: dict[str, tuple[float, float]] = {
+    "temp": (-150.0, 200.0),
+    "humi": (-1.0, 101.0),
+    "wind": (-1.0, 500.0),
+    "gust": (-1.0, 500.0),
+    "rain": (-1.0, 2000.0),
+    "press": (0.0, 2000.0),
+    "uv": (-1.0, 2000.0),
+    "solar": (-1.0, 5000.0),
+    "pm": (-1.0, 3000.0),
+}
+
+
+def _validate_observation(observation: Observation) -> None:
+    """Emit warning logs for sensor values outside plausible ranges."""
+    for column, value in observation.items():
+        if not isinstance(value, int | float):
+            continue
+        col_lower = column.lower()
+        for substr, (lo, hi) in _SENSOR_BOUNDS.items():
+            if substr in col_lower and not lo <= value <= hi:
+                _logger.warning(
+                    "Implausible value for %s: %s (expected %s..%s)",
+                    column,
+                    value,
+                    lo,
+                    hi,
+                )
+                break
 
 
 def _column_name(text: str) -> str:
@@ -402,6 +437,7 @@ def create_database_if_not_exists(
 
     """
     if Path(db_path).exists():
+        _ensure_unique_ts_index(db_path, table_name)
         return False
 
     with closing(_connect_database(db_path, read_only=False)) as conn:
@@ -414,6 +450,10 @@ def create_database_if_not_exists(
         """
 
         cursor.execute(table_schema)
+        cursor.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table_name}_{_TS_COL} "
+            f"ON {table_name}({_TS_COL})",
+        )
         conn.commit()
 
         print(f"Database created with table '{table_name}' at: {db_path}")
@@ -447,19 +487,78 @@ def _insert_dict_row(
     placeholders = ", ".join(["?" for _ in values])
     columns_str = ", ".join(columns)
 
-    query = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+    query = (
+        f"INSERT OR IGNORE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+    )
     cursor.execute(query, values)
     conn.commit()
     return cursor.lastrowid
+
+
+def _ensure_unique_ts_index(
+    db_path: str,
+    table_name: str = _DEFAULT_TABLE_NAME,
+) -> None:
+    """Add a UNIQUE index on ts for existing databases that lack one."""
+    with closing(_connect_database(db_path, read_only=False)) as conn:
+        conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table_name}_{_TS_COL} "
+            f"ON {table_name}({_TS_COL})",
+        )
+        conn.commit()
 
 
 def insert_observation(
     db_path: str,
     observation: Observation,
 ) -> None:
+    _validate_observation(observation)
     with closing(_connect_database(db_path, read_only=False)) as conn:
         _ensure_columns(conn, set(observation.keys()))
         _insert_dict_row(conn, _DEFAULT_TABLE_NAME, observation)
+
+
+def query_db_metrics(db_path: str) -> DbMetrics:
+    """Query database for summary metrics."""
+    db_file = Path(db_path)
+    file_size = db_file.stat().st_size if db_file.exists() else 0
+
+    with closing(
+        _connect_database(db_path, read_only=True, use_row_factory=True),
+    ) as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) as cnt FROM {_DEFAULT_TABLE_NAME}")
+        row_count = cursor.fetchone()["cnt"]
+
+        cursor.execute(
+            f"SELECT MIN({_TS_COL}) as earliest, MAX({_TS_COL}) as latest "
+            f"FROM {_DEFAULT_TABLE_NAME}",
+        )
+        ts_row = cursor.fetchone()
+
+        cursor.execute(f"PRAGMA table_info({_DEFAULT_TABLE_NAME})")
+        column_count = len(cursor.fetchall())
+
+    return {
+        "row_count": row_count,
+        "db_file_size_bytes": file_size,
+        "earliest_ts": ts_row["earliest"],
+        "latest_ts": ts_row["latest"],
+        "column_count": column_count,
+    }
+
+
+def query_latest_timestamp(db_path: str) -> str | None:
+    """Return the most recent observation timestamp, or None if empty."""
+    with closing(
+        _connect_database(db_path, read_only=True, use_row_factory=True),
+    ) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT MAX({_TS_COL}) as latest FROM {_DEFAULT_TABLE_NAME}",
+        )
+        row = cursor.fetchone()
+        return row["latest"] if row else None
 
 
 def query_daily_aggregated_data(

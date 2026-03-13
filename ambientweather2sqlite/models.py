@@ -20,6 +20,7 @@ class AppConfig:
     live_data_url: str
     database_path: str
     port: int | None = None
+    log_format: str = "text"
 
 
 class LiveDataMetadata(TypedDict):
@@ -43,8 +44,27 @@ class ErrorPayload(TypedDict):
     error: str
 
 
+class HealthPayload(TypedDict):
+    status: str
+    last_observation_ts: str | None
+    row_count: int
+
+
+class DbMetrics(TypedDict):
+    row_count: int
+    db_file_size_bytes: int
+    earliest_ts: str | None
+    latest_ts: str | None
+    column_count: int
+
+
 type JsonResponse = (
-    LiveDataPayload | DailyAggregatedPayload | HourlyAggregatedPayload | ErrorPayload
+    LiveDataPayload
+    | DailyAggregatedPayload
+    | HourlyAggregatedPayload
+    | ErrorPayload
+    | HealthPayload
+    | DbMetrics
 )
 
 

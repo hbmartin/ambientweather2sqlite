@@ -1,9 +1,9 @@
-import ambientweather2sqlite.configuration as configuration
 import tempfile
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
+from ambientweather2sqlite import configuration
 from ambientweather2sqlite.configuration import load_config
 
 
@@ -41,8 +41,7 @@ class TestConfiguration(TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"
             config_path.write_text(
-                "live_data_url = 123\n"
-                'database_path = "/tmp/aw2sqlite.db"\n',
+                'live_data_url = 123\ndatabase_path = "/tmp/aw2sqlite.db"\n',
                 encoding="utf-8",
             )
 
@@ -109,6 +108,7 @@ class TestConfiguration(TestCase):
                 patch(
                     "builtins.input",
                     side_effect=[
+                        "n",  # Skip auto-scan
                         "not-a-url",
                         "http://127.0.0.1/livedata.htm",
                         "",
@@ -134,6 +134,7 @@ class TestConfiguration(TestCase):
             with patch(
                 "builtins.input",
                 side_effect=[
+                    "n",  # Skip auto-scan
                     "http://127.0.0.1/livedata.htm",
                     "/tmp/weather.db",
                     "8123",
@@ -160,6 +161,7 @@ class TestConfiguration(TestCase):
                 patch(
                     "builtins.input",
                     side_effect=[
+                        "n",  # Skip auto-scan
                         "http://127.0.0.1/livedata.htm",
                         "",
                         "",

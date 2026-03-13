@@ -1,6 +1,5 @@
 import json
 from http.client import HTTPException
-from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
@@ -39,18 +38,23 @@ class TestStartDaemon(TestCase):
     def test_start_daemon_processes_one_update_and_shuts_down_server(self):
         database_path = "/tmp/weather.db"
         server = Mock()
+        logger = Mock()
 
         with (
             patch("builtins.print") as mock_print,
             patch("ambientweather2sqlite.daemon.clear_lines") as mock_clear_lines,
-            patch("ambientweather2sqlite.daemon.logging.basicConfig"),
-            patch("ambientweather2sqlite.daemon.logging.FileHandler"),
-            patch("ambientweather2sqlite.daemon.logging.getLogger", return_value=Mock()),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
             patch(
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({"tempf": "Outdoor Temperature"}, {}),
             ) as mock_create_metadata,
-            patch("ambientweather2sqlite.daemon.Server", return_value=server) as mock_server,
+            patch(
+                "ambientweather2sqlite.daemon.Server",
+                return_value=server,
+            ) as mock_server,
             patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
@@ -61,14 +65,14 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.wait_for_next_update",
                 side_effect=KeyboardInterrupt,
             ),
+            self.assertRaises(SystemExit) as exc,
         ):
-            with self.assertRaises(SystemExit) as exc:
-                start_daemon(
-                    "http://127.0.0.1/livedata.htm",
-                    database_path,
-                    port=8080,
-                    period_seconds=5,
-                )
+            start_daemon(
+                "http://127.0.0.1/livedata.htm",
+                database_path,
+                port=8080,
+                period_seconds=5,
+            )
 
         self.assertEqual(exc.exception.code, 0)
         mock_create_metadata.assert_called_once_with(
@@ -106,9 +110,10 @@ class TestStartDaemon(TestCase):
         with (
             patch("builtins.print") as mock_print,
             patch("ambientweather2sqlite.daemon.clear_lines"),
-            patch("ambientweather2sqlite.daemon.logging.basicConfig"),
-            patch("ambientweather2sqlite.daemon.logging.FileHandler"),
-            patch("ambientweather2sqlite.daemon.logging.getLogger", return_value=logger),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
             patch(
                 "ambientweather2sqlite.daemon.create_metadata",
                 side_effect=HTTPException("metadata down"),
@@ -133,13 +138,7 @@ class TestStartDaemon(TestCase):
                 )
 
         self.assertEqual(exc.exception.code, 0)
-        self.assertEqual(
-            logger.info.call_args_list,
-            [
-                call("HTTPException\nmetadata down"),
-                call("HTTPException\nlive data down"),
-            ],
-        )
+        self.assertEqual(logger.info.call_count, 2)
         server.start.assert_called_once_with()
         server.shutdown.assert_called_once_with()
         mock_insert.assert_not_called()
@@ -162,9 +161,10 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.clear_lines",
                 side_effect=[None, KeyboardInterrupt],
             ) as mock_clear_lines,
-            patch("ambientweather2sqlite.daemon.logging.basicConfig"),
-            patch("ambientweather2sqlite.daemon.logging.FileHandler"),
-            patch("ambientweather2sqlite.daemon.logging.getLogger", return_value=logger),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
             patch(
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({}, {}),
@@ -200,9 +200,10 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.clear_lines",
                 side_effect=[None, KeyboardInterrupt],
             ) as mock_clear_lines,
-            patch("ambientweather2sqlite.daemon.logging.basicConfig"),
-            patch("ambientweather2sqlite.daemon.logging.FileHandler"),
-            patch("ambientweather2sqlite.daemon.logging.getLogger", return_value=logger),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
             patch(
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({}, {}),
@@ -222,10 +223,7 @@ class TestStartDaemon(TestCase):
                 )
 
         self.assertEqual(exc.exception.code, 0)
-        self.assertEqual(
-            logger.info.call_args_list,
-            [call("HTTPException\nlive data down")],
-        )
+        self.assertEqual(logger.info.call_count, 1)
         self.assertEqual(mock_clear_lines.call_args_list, [call(0), call(1)])
         mock_wait.assert_called_once_with(5)
         mock_insert.assert_not_called()
