@@ -20,6 +20,8 @@ def _ipv4_candidate(sockaddr: object) -> str | None:
         return None
 
     candidate = sockaddr[0]
+    if not isinstance(candidate, str):
+        return None
     return candidate if _is_non_loopback_ipv4(candidate) else None
 
 
