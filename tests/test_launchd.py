@@ -28,6 +28,17 @@ class TestLaunchd(TestCase):
         # Should parse as valid XML
         ET.fromstring(plist)
 
+    def test_generate_plist_falls_back_to_python_module(self):
+        with (
+            patch("ambientweather2sqlite.launchd.shutil.which", return_value=None),
+            patch("ambientweather2sqlite.launchd.sys.executable", "/usr/bin/python3"),
+        ):
+            plist = generate_plist(Path("/tmp/test-config.toml"))
+
+        self.assertIn("/usr/bin/python3", plist)
+        self.assertIn("<string>-m</string>", plist)
+        self.assertIn("<string>ambientweather2sqlite</string>", plist)
+
     @patch("ambientweather2sqlite.launchd.Path.home")
     def test_install_launchd_writes_plist_file(self, mock_home):
         with tempfile.TemporaryDirectory() as tmp:

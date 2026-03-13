@@ -10,17 +10,31 @@ from ambientweather2sqlite.scanner import (
 
 
 class TestDetectLocalSubnet(TestCase):
-    @patch("ambientweather2sqlite.scanner.socket.socket")
-    def test_returns_slash_24_subnet(self, mock_socket_cls):
-        mock_sock = MagicMock()
-        mock_socket_cls.return_value.__enter__ = lambda _s: mock_sock
-        mock_socket_cls.return_value.__exit__ = MagicMock(return_value=False)
-        mock_sock.getsockname.return_value = ("192.168.1.42", 12345)
+    def test_returns_slash_24_subnet_when_prefix_unknown(self):
+        with (
+            patch(
+                "ambientweather2sqlite.scanner._detect_prefix_length",
+                return_value=None,
+            ),
+            patch(
+                "ambientweather2sqlite.scanner._detect_local_ip",
+                return_value="192.168.1.42",
+            ),
+        ):
+            self.assertEqual(detect_local_subnet(), "192.168.1.0/24")
 
-        result = detect_local_subnet()
-
-        self.assertEqual(result, "192.168.1.0/24")
-        mock_sock.connect.assert_called_once_with(("8.8.8.8", 80))
+    def test_uses_detected_prefix_length(self):
+        with (
+            patch(
+                "ambientweather2sqlite.scanner._detect_prefix_length",
+                return_value=20,
+            ),
+            patch(
+                "ambientweather2sqlite.scanner._detect_local_ip",
+                return_value="192.168.16.42",
+            ),
+        ):
+            self.assertEqual(detect_local_subnet(), "192.168.16.0/20")
 
 
 class TestScanPort80(TestCase):

@@ -1,7 +1,9 @@
 """Network scanner to auto-detect AmbientWeather stations on the local subnet."""
 
 import ipaddress
+import re
 import socket
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.client import HTTPException
 
@@ -9,12 +11,74 @@ from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
 
 
-def detect_local_subnet() -> str:
-    """Detect the local /24 subnet by finding the machine's default route IP."""
+def _detect_local_ip() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-    network = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+        return s.getsockname()[0]
+
+
+def _prefix_length_from_ifconfig(output: str, local_ip: str) -> int | None:
+    match = re.search(
+        rf"inet {re.escape(local_ip)} .*?netmask (0x[0-9a-fA-F]+|\d+\.\d+\.\d+\.\d+)",
+        output,
+    )
+    if match is None:
+        return None
+
+    netmask = match.group(1)
+    netmask_ip = (
+        str(ipaddress.IPv4Address(int(netmask, 16)))
+        if netmask.startswith("0x")
+        else netmask
+    )
+    return ipaddress.IPv4Network(f"0.0.0.0/{netmask_ip}").prefixlen
+
+
+def _detect_prefix_length(local_ip: str) -> int | None:
+    command_parsers = (
+        (
+            ["ip", "-o", "-f", "inet", "addr", "show"],
+            lambda output: next(
+                (
+                    int(match.group(1))
+                    for match in re.finditer(
+                        rf"\binet {re.escape(local_ip)}/(\d+)\b",
+                        output,
+                    )
+                ),
+                None,
+            ),
+        ),
+        (["ifconfig"], lambda output: _prefix_length_from_ifconfig(output, local_ip)),
+    )
+
+    for command, parser in command_parsers:
+        try:
+            result = subprocess.run(  # noqa: S603
+                command,
+                capture_output=True,
+                check=True,
+                text=True,
+                timeout=1,
+            )
+        except (
+            FileNotFoundError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ):
+            continue
+
+        if prefix_length := parser(result.stdout):
+            return prefix_length
+
+    return None
+
+
+def detect_local_subnet() -> str:
+    """Detect the local subnet by finding the machine's default route IP."""
+    local_ip = _detect_local_ip()
+    prefix_length = _detect_prefix_length(local_ip) or 24
+    network = ipaddress.ip_network(f"{local_ip}/{prefix_length}", strict=False)
     return str(network)
 
 
