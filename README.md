@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/ambientweather2sqlite.svg)](https://pypi.org/project/ambientweather2sqlite/)
 [![Lint](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml/badge.svg)](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Code style: black](https://img.shields.io/badge/🐧️-black-000000.svg)](https://github.com/psf/black)
+[![codecov](https://codecov.io/gh/hbmartin/ambientweather2sqlite/graph/badge.svg?token=3gZI67ci1N)](https://codecov.io/gh/hbmartin/ambientweather2sqlite)
 [![Checked with pyrefly](https://img.shields.io/badge/🪲-pyrefly-fe8801.svg)](https://pyrefly.org/)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hbmartin/ambientweather2sqlite)
 
@@ -26,14 +26,16 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 
 ## Installation
 
+If you have uv installed, you can run it directly:
+
 ```bash
 uvx ambientweather2sqlite
 ```
 
-Or install it persistently:
+Or install it with curl:
 
 ```bash
-uv tool install ambientweather2sqlite
+curl -LsSf uvx.sh/ambientweather2sqlite/install.sh | sh
 ```
 
 Requires Python 3.14+.
