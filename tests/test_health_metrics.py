@@ -4,19 +4,20 @@ import json
 import logging
 import tempfile
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import TestCase
 from urllib.error import URLError
 from urllib.request import urlopen
 
 from ambientweather2sqlite.database import (
-    _validate_observation,
     create_database_if_not_exists,
     insert_observation,
     query_db_metrics,
     query_latest_timestamp,
+    query_observation_gaps,
 )
+from ambientweather2sqlite.database.writes import _validate_observation
 from ambientweather2sqlite.server import Server
 
 
@@ -121,6 +122,76 @@ class TestDeduplication(TestCase):
         self.assertEqual(metrics["row_count"], 2)
 
 
+class TestQueryObservationGaps(TestCase):
+    def setUp(self):
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+        Path(self.db_path).unlink(missing_ok=True)
+        create_database_if_not_exists(self.db_path)
+        self.now = datetime(2026, 1, 2, 12, 0, 0, tzinfo=UTC)
+
+    def tearDown(self):
+        Path(self.db_path).unlink(missing_ok=True)
+
+    def _insert_at(self, ts: str) -> None:
+        insert_observation(self.db_path, {"ts": ts, "outTemp": 70.0})
+
+    def test_no_gaps_for_empty_db(self):
+        self.assertEqual(query_observation_gaps(self.db_path, now=self.now), [])
+
+    def test_no_gaps_for_continuous_observations(self):
+        self._insert_at("2026-01-02 11:58:00")
+        self._insert_at("2026-01-02 11:59:00")
+        self._insert_at("2026-01-02 12:00:00")
+
+        self.assertEqual(query_observation_gaps(self.db_path, now=self.now), [])
+
+    def test_detects_gap_between_observations(self):
+        self._insert_at("2026-01-02 10:00:00")
+        self._insert_at("2026-01-02 11:58:00")
+        self._insert_at("2026-01-02 12:00:00")
+
+        gaps = query_observation_gaps(self.db_path, now=self.now)
+
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["start"], "2026-01-02 10:00:00")
+        self.assertEqual(gaps[0]["end"], "2026-01-02 11:58:00")
+        self.assertEqual(gaps[0]["duration_seconds"], 7080.0)
+
+    def test_detects_ongoing_trailing_gap(self):
+        self._insert_at("2026-01-02 10:00:00")
+
+        gaps = query_observation_gaps(self.db_path, now=self.now)
+
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["start"], "2026-01-02 10:00:00")
+        self.assertIsNone(gaps[0]["end"])
+        self.assertEqual(gaps[0]["duration_seconds"], 7200.0)
+
+    def test_ignores_observations_outside_window(self):
+        self._insert_at("2026-01-01 00:00:00")  # outside 24h window
+        self._insert_at("2026-01-02 11:59:00")
+        self._insert_at("2026-01-02 12:00:00")
+
+        gaps = query_observation_gaps(self.db_path, hours=24, now=self.now)
+
+        self.assertEqual(gaps, [])
+
+    def test_respects_custom_threshold(self):
+        self._insert_at("2026-01-02 11:58:00")
+        self._insert_at("2026-01-02 12:00:00")
+
+        gaps = query_observation_gaps(
+            self.db_path,
+            threshold_seconds=60.0,
+            now=self.now,
+        )
+
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["duration_seconds"], 120.0)
+
+
 class TestDataValidation(TestCase):
     def test_warns_on_implausible_temperature(self):
         with self.assertLogs("ambientweather2sqlite.database", level="WARNING") as cm:
@@ -185,7 +256,7 @@ class TestServerHealthMetrics(TestCase):
             try:
                 if self._get_json("/health")["status"] == "ok":
                     return
-            except OSError, URLError, json.JSONDecodeError, KeyError:
+            except (OSError, URLError, json.JSONDecodeError, KeyError):
                 if time.monotonic() >= deadline:
                     self.fail("Server not ready")
                 time.sleep(0.01)

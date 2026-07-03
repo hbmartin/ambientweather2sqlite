@@ -4,7 +4,7 @@ version = "0.8.0"
 description = "A project to record weather observations from an AmbientWeather station over the local network - no API needed!"
 readme = "README.md"
 license = "GPL-3.0-or-later"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = []
 authors = [
     { name = "Harold Martin", email = "Harold.Martin@gmail.com" },
@@ -18,6 +18,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
@@ -55,7 +56,7 @@ relative_files = true
 
 [tool.black]
 line-length = 88
-target-version = ["py314"]
+target-version = ["py313", "py314"]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -64,20 +65,18 @@ exclude = [".bzr", ".direnv", ".eggs", ".git", ".git-rewrite", ".hg", ".ipynb_ch
 # Same as Black.
 line-length = 88
 indent-width = 4
-target-version = "py314"
+target-version = "py313"
 
 lint.select = ["ALL"]
 lint.ignore = ["ANN204", "D100", "D101", "D103", "D104", "D107", "D203", "D205", "D213", "D401", "DTZ005", "EM101", "T201"]
 
 [tool.ruff.lint.per-file-ignores]
-"ambientweather2sqlite/awparser.py" = ["ANN001", "ANN201", "D102", "ERA001", "SIM102"]
 "ambientweather2sqlite/configuration.py" = ["E501", "PLC0415"]
-"ambientweather2sqlite/database.py" = ["S608", "SIM118"]
+"ambientweather2sqlite/database/*.py" = ["S608", "SIM118"]
 "ambientweather2sqlite/mureq.py" = ["ANN003", "D105", "D203", "D205", "D213", "D401", "EM101", "ERA001", "FIX003", "TD001", "TD002", "TRY003"]
 "ambientweather2sqlite/scanner.py" = ["BLE001", "S110"]
-"ambientweather2sqlite/server.py" = ["ANN002", "ANN003", "ANN201", "ANN202", "D102", "G004", "N802", "TRY003"]
 "ambientweather2sqlite/__main__.py" = ["PLC0415"]
-"tests/*.py" = ["A002", "ANN001", "ANN002", "ANN201", "ARG002", "ARG005", "D102", "D400", "D415", "E501", "PLC0415", "PT009", "PT027", "PT028", "S108", "S314", "SIM115", "SIM117", "TRY003"]
+"tests/*.py" = ["A002", "ANN001", "ANN002", "ANN201", "ARG002", "ARG005", "D102", "D400", "D415", "E501", "PLC0415", "PLR0913", "PT009", "PT027", "PT028", "S101", "S104", "S106", "S108", "S310", "S314", "SIM115", "SIM117", "TRY003"]
 
 [tool.ruff.format]
 # Same as Black.

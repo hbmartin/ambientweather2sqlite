@@ -1,9 +1,17 @@
 import json
+import signal
+import threading
 from http.client import HTTPException
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
-from ambientweather2sqlite.daemon import clear_lines, start_daemon, wait_for_next_update
+from ambientweather2sqlite.daemon import (
+    _install_sigterm_handler,
+    clear_lines,
+    next_deadline,
+    start_daemon,
+    wait_for_next_update,
+)
 
 
 class TestDaemonHelpers(TestCase):
@@ -20,8 +28,12 @@ class TestDaemonHelpers(TestCase):
         with (
             patch("builtins.print") as mock_print,
             patch("ambientweather2sqlite.daemon.time.sleep") as mock_sleep,
+            patch(
+                "ambientweather2sqlite.daemon.time.monotonic",
+                side_effect=[0.0, 1.0, 2.0, 3.0],
+            ),
         ):
-            wait_for_next_update(3)
+            wait_for_next_update(3.0)
 
         self.assertEqual(
             mock_print.call_args_list,
@@ -31,7 +43,49 @@ class TestDaemonHelpers(TestCase):
                 call("\033[KNext update in 1 seconds", end="\r"),
             ],
         )
-        self.assertEqual(mock_sleep.call_args_list, [call(1), call(1), call(1)])
+        self.assertEqual(
+            mock_sleep.call_args_list,
+            [call(1.0), call(1.0), call(1.0)],
+        )
+
+    def test_wait_for_next_update_returns_immediately_when_deadline_passed(self):
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.time.sleep") as mock_sleep,
+            patch("ambientweather2sqlite.daemon.time.monotonic", return_value=10.0),
+        ):
+            wait_for_next_update(5.0)
+
+        mock_print.assert_not_called()
+        mock_sleep.assert_not_called()
+
+    def test_next_deadline_is_aligned_to_epoch(self):
+        self.assertEqual(next_deadline(100.0, 60, 100.5), 160.0)
+        self.assertEqual(next_deadline(100.0, 60, 159.9), 160.0)
+
+    def test_next_deadline_skips_missed_slots(self):
+        # A fetch that took 130s should schedule the next sample at +180s,
+        # not queue up the two missed slots.
+        self.assertEqual(next_deadline(100.0, 60, 230.0), 280.0)
+
+    def test_install_sigterm_handler_raises_keyboard_interrupt(self):
+        original = signal.getsignal(signal.SIGTERM)
+        try:
+            _install_sigterm_handler()
+            handler = signal.getsignal(signal.SIGTERM)
+            self.assertNotEqual(handler, original)
+            assert callable(handler)
+            with self.assertRaises(KeyboardInterrupt):
+                handler(signal.SIGTERM, None)
+        finally:
+            signal.signal(signal.SIGTERM, original)
+
+    def test_install_sigterm_handler_is_noop_off_main_thread(self):
+        original = signal.getsignal(signal.SIGTERM)
+        thread = threading.Thread(target=_install_sigterm_handler)
+        thread.start()
+        thread.join()
+        self.assertEqual(signal.getsignal(signal.SIGTERM), original)
 
 
 class TestStartDaemon(TestCase):
@@ -84,6 +138,7 @@ class TestStartDaemon(TestCase):
             database_path,
             8080,
             "localhost",
+            None,
         )
         server.start.assert_called_once_with()
         server.shutdown.assert_called_once_with()
@@ -225,7 +280,7 @@ class TestStartDaemon(TestCase):
         self.assertEqual(exc.exception.code, 0)
         self.assertEqual(logger.info.call_count, 1)
         self.assertEqual(mock_clear_lines.call_args_list, [call(0), call(1)])
-        mock_wait.assert_called_once_with(5)
+        mock_wait.assert_called_once()
         mock_insert.assert_not_called()
         self.assertIn(
             call("Error fetching live data: live data down"),

@@ -6,11 +6,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ambientweather2sqlite.database import (
-    _column_name,
-    _insert_dict_row,
     create_database_if_not_exists,
     insert_observation,
 )
+from ambientweather2sqlite.database.schema import _column_name
+from ambientweather2sqlite.database.writes import _insert_dict_row
 
 
 class TestDatabaseUtilityFunctions(unittest.TestCase):
@@ -145,7 +145,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         create_database_if_not_exists(self.db_path)
 
         with patch(
-            "ambientweather2sqlite.database._current_observation_timestamp",
+            "ambientweather2sqlite.database.writes._current_observation_timestamp",
             side_effect=[
                 "2026-01-01 12:00:00.000001",
                 "2026-01-01 12:00:00.000002",
@@ -171,7 +171,7 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         create_database_if_not_exists(self.db_path)
 
         with patch(
-            "ambientweather2sqlite.database._current_observation_timestamp",
+            "ambientweather2sqlite.database.writes._current_observation_timestamp",
             side_effect=[
                 "2026-01-01 12:00:00.000010",
                 "2026-01-01 12:00:00.000011",

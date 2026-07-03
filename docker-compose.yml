@@ -1,0 +1,16 @@
+# Example deployment. Before the first start, create ./data/aw2sqlite.toml
+# by running the interactive wizard:
+#
+#   mkdir -p data
+#   docker compose run --rm aw2sqlite config --config /data/aw2sqlite.toml
+#
+# The container binds the API server to 0.0.0.0 so the port mapping below
+# works; set `auth_token` in the config if the port is reachable by others.
+services:
+  aw2sqlite:
+    build: .
+    volumes:
+      - ./data:/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

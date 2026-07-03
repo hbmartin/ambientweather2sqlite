@@ -21,7 +21,13 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 * **Datasette Compatible:** Metadata JSON follows the Datasette metadata format with labels, units, and licensing
 * **Structured Logging:** Optional JSONL log format for log aggregator ingestion
 * **Interactive Configuration:** Command-line setup wizard with optional network auto-scan
-* **macOS Service:** Generate launchd plist files for running as a background daemon
+* **Gap Detection:** `status` reports periods with missing observations, including ongoing outages
+* **Data Export:** Dump observations as CSV or JSON, with optional time bounds
+* **Prometheus Metrics:** `/metrics` serves the Prometheus text format for Grafana dashboards
+* **MQTT Publishing:** Optional per-observation publish to an MQTT broker (e.g. Home Assistant)
+* **API Authentication:** Optional bearer token and configurable bind address for the HTTP server
+* **macOS & Linux Services:** Generate launchd plists or systemd user units for running as a background daemon
+* **Docker Support:** Dockerfile and compose example included
 * **Zero Dependencies:** Pure Python with no (potentially) untrusted 3rd parties
 
 ## Installation
@@ -38,7 +44,22 @@ Or install it with curl:
 curl -LsSf uvx.sh/ambientweather2sqlite/install.sh | sh
 ```
 
-Requires Python 3.14+.
+Requires Python 3.13+.
+
+### Docker
+
+A `Dockerfile` and `docker-compose.yml` are included. All state lives in a
+`/data` volume; create the config once with the interactive wizard, then start
+the service:
+
+```bash
+mkdir -p data
+docker compose run --rm aw2sqlite config --config /data/aw2sqlite.toml
+docker compose up -d
+```
+
+The container starts the server bound to `0.0.0.0` so the published port is
+reachable; set `auth_token` in the config if others can reach that port.
 
 ## CLI
 
@@ -55,18 +76,21 @@ aw2sqlite <command> [options]
 | `serve` | Start the daemon and optional API server (default if no command given) |
 | `config` | Run the interactive configuration wizard |
 | `once` | Fetch a single observation and print it as JSON (no DB write) |
-| `status` | Show database metrics (row count, file size, timestamp range) |
+| `status` | Show database metrics (row count, file size, timestamp range) and observation gaps |
+| `export` | Export observations as CSV or JSON |
 | `install-launchd` | Generate a macOS launchd plist for running as a service |
+| `install-systemd` | Generate a systemd user unit for running as a service (Linux) |
 
 ### `aw2sqlite serve`
 
 ```bash
-aw2sqlite serve [--port PORT] [--config CONFIG_PATH] [--log-format {text,json}]
+aw2sqlite serve [--port PORT] [--host HOST] [--config CONFIG_PATH] [--log-format {text,json}]
 ```
 
 | Flag | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--port PORT` | Integer | Config file value, or disabled | Port number for the HTTP JSON API server |
+| `--host HOST` | String | Config file value, or `localhost` | Bind address for the HTTP JSON API server |
 | `--config CONFIG_PATH` | String | `./aw2sqlite.toml`, then `~/.aw2sqlite.toml` | Path to a TOML config file |
 | `--log-format` | `text` or `json` | `text` | Log output format. `json` outputs single-line JSONL for log aggregators |
 
@@ -97,10 +121,13 @@ Fetches a single observation from the weather station and prints it as JSON to s
 ### `aw2sqlite status`
 
 ```bash
-aw2sqlite status [--config CONFIG_PATH]
+aw2sqlite status [--config CONFIG_PATH] [--gap-hours HOURS] [--gap-threshold SECONDS]
 ```
 
-Prints database metrics as JSON:
+Prints database metrics as JSON, including any observation gaps found in the
+scan window (default: gaps longer than 180 seconds within the last 24 hours).
+A gap with `"end": null` is ongoing - the collector has not recorded anything
+since `start`.
 
 ```json
 {
@@ -108,8 +135,35 @@ Prints database metrics as JSON:
   "db_file_size_bytes": 1048576,
   "earliest_ts": "2025-01-01 00:00:00",
   "latest_ts": "2026-03-12 10:30:00",
-  "column_count": 25
+  "column_count": 25,
+  "gaps": [
+    {
+      "start": "2026-03-12 04:12:00",
+      "end": "2026-03-12 06:30:00",
+      "duration_seconds": 8280.0
+    }
+  ]
 }
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--gap-hours` | `24` | Window (in hours) to scan for gaps |
+| `--gap-threshold` | `180` | Minimum seconds between observations to count as a gap |
+
+### `aw2sqlite export`
+
+```bash
+aw2sqlite export [--format {csv,json}] [--start TS] [--end TS] [--output FILE] [--config CONFIG_PATH]
+```
+
+Exports the observations table, oldest first, as CSV (default) or JSON. Output
+goes to stdout unless `--output` is given. `--start` (inclusive) and `--end`
+(exclusive) accept UTC timestamps like `2026-01-01` or `"2026-01-01 12:00:00"`
+and are compared against the stored `ts` column.
+
+```bash
+aw2sqlite export --format csv --start 2026-01-01 --end 2026-02-01 --output january.csv
 ```
 
 ### `aw2sqlite install-launchd`
@@ -119,6 +173,14 @@ aw2sqlite install-launchd [--config CONFIG_PATH]
 ```
 
 Generates a macOS launchd plist file at `~/Library/LaunchAgents/com.ambientweather2sqlite.plist` and prints `launchctl` instructions to load/unload the service.
+
+### `aw2sqlite install-systemd`
+
+```bash
+aw2sqlite install-systemd [--config CONFIG_PATH]
+```
+
+Generates a systemd user unit at `~/.config/systemd/user/ambientweather2sqlite.service` and prints `systemctl --user` instructions to enable/disable the service. Use `loginctl enable-linger $USER` to keep it running after logout.
 
 ## Setup
 
@@ -136,8 +198,20 @@ The generated config file is a TOML file:
 ```toml
 live_data_url = "http://192.168.0.226/livedata.htm"
 database_path = "/path/to/aw2sqlite.db"
-port = 8080        # optional, omit to disable the JSON server
+port = 8080         # optional, omit to disable the JSON server
+host = "localhost"  # optional bind address; use "0.0.0.0" to expose on the network
+auth_token = "s3cret" # optional; require "Authorization: Bearer s3cret" on API requests
 log_format = "text" # optional, "text" (default) or "json" for JSONL logs
+
+# Optional: publish each observation as JSON to an MQTT broker
+[mqtt]
+host = "192.168.0.10"
+topic = "weather/observations"
+port = 1883             # optional (default: 1883)
+username = "user"       # optional
+password = "pass"       # optional
+client_id = "aw2sqlite" # optional
+tls = false             # optional (default: false)
 ```
 
 Config file lookup order:
@@ -153,8 +227,10 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running
 - Implausible sensor values (e.g. temperature outside -150..200 range) emit a warning log
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
+- Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
+- When an `[mqtt]` config table is present, each observation is also published to the broker as JSON (failures are logged and never interrupt collection)
 - A metadata file (`<database_stem>_metadata.json`) is generated in [Datasette metadata format](https://docs.datasette.io/en/stable/metadata.html) with human-readable sensor labels, units, and licensing (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
-- Press `Ctrl+C` to stop
+- Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown
 
 ### Database Schema
 
@@ -164,7 +240,9 @@ SQLite is configured with WAL journal mode, normal synchronous writes, in-memory
 
 ## HTTP JSON API
 
-When a port is configured, the daemon starts an HTTP server on `localhost` in a background thread with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`.
+When a port is configured, the daemon starts an HTTP server in a background thread with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`.
+
+The server binds to `localhost` by default; set `host` in the config (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.
 
 ### `GET /` - Live Data
 
@@ -274,6 +352,41 @@ Returns aggregated sensor data grouped by date and hour. Each date contains exac
 
 The actual array always contains 24 entries, one per hour.
 
+### `GET /range` - Arbitrary Range Aggregation
+
+Returns aggregates over a single arbitrary `[start, end)` time window.
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `tz`      | Yes      | -       | Timezone used to interpret `start`/`end` (see [Timezone Support](#timezone-support)) |
+| `q`       | Yes      | -       | Aggregation field(s), repeatable (see [Aggregation Fields](#aggregation-fields)) |
+| `start`   | Yes      | -       | Window start: ISO date (`2026-06-22`) or datetime (`2026-06-22 06:00:00`) |
+| `end`     | No       | now     | Window end (exclusive), same formats as `start` |
+
+**Example:**
+
+```text
+/range?tz=America/New_York&q=avg_outTemp&q=max_gustspeed&start=2026-06-22&end=2026-06-29
+```
+
+**Response:**
+
+```json
+{
+  "data": {
+    "start": "2026-06-22 04:00:00",
+    "end": "2026-06-29 04:00:00",
+    "avg_outTemp": 71.2,
+    "max_gustspeed": 18.3,
+    "count": 10080
+  }
+}
+```
+
+`start` and `end` in the response are the resolved UTC bounds of the window.
+
 ### `GET /health` - Health Check
 
 Returns the daemon health status, last observation timestamp, and row count.
@@ -290,9 +403,7 @@ Returns the daemon health status, last observation timestamp, and row count.
 
 ### `GET /metrics` - Database Metrics
 
-Returns database summary statistics.
-
-**Response:**
+Returns database summary statistics. The default response is JSON:
 
 ```json
 {
@@ -302,6 +413,26 @@ Returns database summary statistics.
   "latest_ts": "2026-03-12 10:30:00",
   "column_count": 25
 }
+```
+
+**Prometheus format:** with `?format=prometheus`, or when the `Accept` header
+asks for `text/plain`/OpenMetrics (as Prometheus scrapers do), the endpoint
+serves the Prometheus text exposition format instead - point a Prometheus
+scrape job at `/metrics` and it works without configuration:
+
+```text
+# HELP aw2sqlite_observations_total Total number of observations recorded.
+# TYPE aw2sqlite_observations_total counter
+aw2sqlite_observations_total 10000
+# HELP aw2sqlite_db_file_size_bytes Size of the SQLite database file.
+# TYPE aw2sqlite_db_file_size_bytes gauge
+aw2sqlite_db_file_size_bytes 1048576
+# HELP aw2sqlite_last_observation_age_seconds Seconds since the most recent observation.
+# TYPE aw2sqlite_last_observation_age_seconds gauge
+aw2sqlite_last_observation_age_seconds 42.5
+# HELP aw2sqlite_sensor_value Latest sensor readings by sensor name.
+# TYPE aw2sqlite_sensor_value gauge
+aw2sqlite_sensor_value{sensor="outTemp"} 72.5
 ```
 
 ### Aggregation Fields
@@ -337,6 +468,7 @@ All errors return JSON with an `error` field:
 | Status | Cause |
 |--------|-------|
 | 400    | Invalid input: bad timezone, date format, date range, aggregation field, or missing required parameters |
+| 401    | Missing or wrong bearer token (only when `auth_token` is configured) |
 | 404    | Unknown endpoint |
 | 500    | Server error (e.g. weather station unreachable) |
 

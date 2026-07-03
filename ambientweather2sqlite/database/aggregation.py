@@ -1,13 +1,15 @@
-import logging
+"""Timezone-aware daily, hourly, and range aggregation queries."""
+
+from __future__ import annotations
+
 import re
-import sqlite3
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
+from datetime import timezone as timezone_cls
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from .exceptions import (
+from ambientweather2sqlite.exceptions import (
     InvalidColumnNameError,
     InvalidDateError,
     InvalidDateRangeError,
@@ -15,92 +17,24 @@ from .exceptions import (
     InvalidPriorDaysError,
     InvalidTimezoneError,
     MissingAggregationFieldsError,
-    UnexpectedEmptyDictionaryError,
+)
+
+from .connection import (
+    _DEFAULT_TABLE_NAME,
+    _TS_COL,
+    _connect_database,
+    _format_sqlite_timestamp,
+    _parse_stored_timestamp,
 )
 
 if TYPE_CHECKING:
-    from .models import (
+    import sqlite3
+
+    from ambientweather2sqlite.models import (
         AggregatedRow,
         AggregationField,
-        DbMetrics,
         HourlyAggregatedData,
-        Observation,
     )
-
-_DEFAULT_TABLE_NAME = "observations"
-_TS_COL = "ts"
-_SQLITE_BUSY_TIMEOUT_MS = 5_000
-_SQLITE_MMAP_SIZE_BYTES = 268_435_456
-_SQLITE_TS_DEFAULT = "STRFTIME('%Y-%m-%d %H:%M:%f', 'now')"
-
-_logger = logging.getLogger(__name__)
-
-# Generous bounds for sensor value validation (column_substring -> (min, max))
-_SENSOR_BOUNDS: dict[str, tuple[float, float]] = {
-    "temp": (-150.0, 200.0),
-    "humi": (-1.0, 101.0),
-    "wind": (-1.0, 500.0),
-    "gust": (-1.0, 500.0),
-    "rain": (-1.0, 2000.0),
-    "press": (0.0, 2000.0),
-    "uv": (-1.0, 2000.0),
-    "solar": (-1.0, 5000.0),
-    "pm": (-1.0, 3000.0),
-}
-
-
-def _current_observation_timestamp() -> str:
-    """Create a UTC timestamp with sub-second precision for inserts."""
-    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
-
-
-def _prepare_observation(
-    observation: Observation,
-) -> dict[str, str | int | float | None]:
-    prepared = dict(observation)
-    ts_value = prepared.get(_TS_COL)
-    if not isinstance(ts_value, str) or not ts_value.strip():
-        prepared[_TS_COL] = _current_observation_timestamp()
-    return prepared
-
-
-def _unique_ts_index_name(table_name: str) -> str:
-    return f"idx_{table_name}_{_TS_COL}"
-
-
-def _unique_ts_index_sql(table_name: str) -> str:
-    return (
-        f"CREATE UNIQUE INDEX IF NOT EXISTS {_unique_ts_index_name(table_name)} "
-        f"ON {table_name}({_TS_COL})"
-    )
-
-
-def _validate_observation(observation: Observation) -> None:
-    """Emit warning logs for sensor values outside plausible ranges."""
-    for column, value in observation.items():
-        if not isinstance(value, int | float):
-            continue
-        col_lower = column.lower()
-        for substr, (lo, hi) in _SENSOR_BOUNDS.items():
-            if substr in col_lower and not lo <= value <= hi:
-                _logger.warning(
-                    "Implausible value for %s: %s (expected %s..%s)",
-                    column,
-                    value,
-                    lo,
-                    hi,
-                )
-                break
-
-
-def _column_name(text: str) -> str:
-    result = []
-    for char in text:
-        if char.isalnum() or char == "_":
-            result.append(char)
-        else:
-            result.append("_")
-    return "".join(result)
 
 
 def _validate_timezone(tz: str | None) -> str | ZoneInfo:
@@ -174,16 +108,6 @@ def _select_parts_from_parsed_fields(
     return select_parts
 
 
-def _select_parts_from_aggregation_fields(
-    aggregation_fields: list[str],
-    datetime_expression: str,
-) -> list[str]:
-    return _select_parts_from_parsed_fields(
-        _parse_aggregation_fields(aggregation_fields),
-        datetime_expression,
-    )
-
-
 def _parse_query_date(date_string: str) -> date:
     try:
         return date.fromisoformat(date_string)
@@ -232,63 +156,6 @@ def _date_keys_in_range(start_date: date, end_date: date) -> list[str]:
 
 def _empty_hourly_slots() -> list[AggregatedRow | None]:
     return [None for _ in range(24)]
-
-
-def _configure_connection(
-    conn: sqlite3.Connection,
-    *,
-    read_only: bool,
-    use_row_factory: bool = False,
-) -> sqlite3.Connection:
-    conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
-    if use_row_factory:
-        conn.row_factory = sqlite3.Row
-    if not read_only:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute(f"PRAGMA mmap_size={_SQLITE_MMAP_SIZE_BYTES}")
-    return conn
-
-
-def _connect_database(
-    db_path: str,
-    *,
-    read_only: bool,
-    use_row_factory: bool = False,
-) -> sqlite3.Connection:
-    connect_target = f"file:{db_path}?mode=ro" if read_only else db_path
-    conn = sqlite3.connect(
-        connect_target,
-        uri=read_only,
-        timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
-    )
-    return _configure_connection(
-        conn,
-        read_only=read_only,
-        use_row_factory=use_row_factory,
-    )
-
-
-def _format_sqlite_timestamp(value: datetime) -> str:
-    """Store timestamps as UTC naive strings in SQLite's text format.
-
-    Callers should pass timezone-aware datetimes because the value is converted to
-    UTC before its tzinfo is stripped for storage.
-    """
-    return value.astimezone(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _parse_stored_timestamp(value: str) -> datetime:
-    """Parse stored timestamps and normalize them to UTC-aware datetimes.
-
-    Naive timestamps are assumed to have been stored in UTC. Aware timestamps are
-    converted to UTC before being returned.
-    """
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def _fetch_rows_for_zoneinfo_range(
@@ -408,272 +275,79 @@ def _query_hourly_aggregated_data_with_zoneinfo(
     return result
 
 
-def _ensure_columns(
-    conn: sqlite3.Connection,
-    required_columns: set[str],
-    table_name: str = _DEFAULT_TABLE_NAME,
-) -> list[str]:
-    """Checks if a table has columns for every string in required_columns.
-    If not, adds the missing columns with REAL type.
+def _local_isoformat_to_utc_timestamp(
+    value: str,
+    timezone: str | ZoneInfo,
+) -> str:
+    """Convert an ISO date/datetime in the query timezone to a stored UTC string."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as e:
+        raise InvalidDateError(value) from e
 
-    Args:
-        conn (sqlite3.Connection): Connection to the SQLite database
-        required_columns (set): Set of column names that should exist
-        table_name (str): Name of the table to check/modify
+    if parsed.tzinfo is not None:
+        return _format_sqlite_timestamp(parsed)
+    if isinstance(timezone, ZoneInfo):
+        return _format_sqlite_timestamp(parsed.replace(tzinfo=timezone))
+    if timezone == "localtime":
+        return _format_sqlite_timestamp(parsed.astimezone())
 
-    Returns:
-        list: List of column names that were added
-
-    Raises:
-        sqlite3.Error: If there's a database error
-
-    """
-    added_columns = []
-
-    cursor = conn.cursor()
-
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    existing_columns = {row[1] for row in cursor.fetchall()}  # row[1] is column name
-
-    missing_columns = required_columns - existing_columns
-
-    for column_name in missing_columns:
-        valid_column_name = _column_name(column_name)
-        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {valid_column_name} REAL")
-        added_columns.append(column_name)
-
-    cursor.close()
-    conn.commit()
-
-    return added_columns
+    offset_hours = float(timezone.removesuffix(" hours"))
+    fixed_offset = timezone_cls(timedelta(hours=offset_hours))
+    return _format_sqlite_timestamp(parsed.replace(tzinfo=fixed_offset))
 
 
-def create_database_if_not_exists(
+def query_range_aggregated_data(
     db_path: str,
-    table_name: str = _DEFAULT_TABLE_NAME,
-) -> bool:
-    """Check if a SQLite database exists at the specified path.
-    If not, create the database and a table with the given name.
+    aggregation_fields: list[str],
+    start: str,
+    end: str | None = None,
+    tz: str | None = None,
+) -> AggregatedRow:
+    """Aggregate observations over an arbitrary [start, end) window.
 
     Args:
-        db_path (str): Path to the SQLite database file
-        table_name (str): Name of the table to create
+        db_path: Path to SQLite database file
+        aggregation_fields: List of aggregation specifications like ["avg_outHumi"]
+        start: Window start as ISO date or datetime, interpreted in `tz`
+        end: Window end (exclusive), defaults to now when None
+        tz: Timezone string (e.g., 'America/New_York', '+05:30')
 
     Returns:
-        bool: True if database was created, False if it already existed
+        Dict with the resolved UTC window bounds, aggregated values, and count
 
     """
-    if Path(db_path).exists():
-        _ensure_unique_ts_index(db_path, table_name)
-        return False
+    parsed_fields = _parse_aggregation_fields(aggregation_fields)
+    timezone = _validate_timezone(tz)
 
-    with closing(_connect_database(db_path, read_only=False)) as conn:
-        cursor = conn.cursor()
+    start_ts = _local_isoformat_to_utc_timestamp(start, timezone)
+    if end is None:
+        end_ts = _format_sqlite_timestamp(datetime.now(UTC))
+    else:
+        end_ts = _local_isoformat_to_utc_timestamp(end, timezone)
 
-        table_schema = f"""
-            CREATE TABLE {table_name} (
-                {_TS_COL} TIMESTAMP DEFAULT ({_SQLITE_TS_DEFAULT})
-            )
-        """
+    if end_ts < start_ts:
+        raise InvalidDateRangeError(start_ts, end_ts)
 
-        cursor.execute(table_schema)
-        cursor.execute(_unique_ts_index_sql(table_name))
-        conn.commit()
-
-        print(f"Database created with table '{table_name}' at: {db_path}")
-        return True
-
-
-def _insert_dict_row(
-    conn: sqlite3.Connection,
-    table_name: str,
-    data_dict: Observation,
-) -> int | None:
-    """Alternative version that takes an existing connection.
-
-    Args:
-        conn (sqlite3.Connection): Existing database connection
-        table_name (str): Name of the table to insert into
-        data_dict (dict): Dictionary where keys are column names and values are the data
-
-    Returns:
-        int: The rowid of the inserted row
-
-    """
-    if not data_dict:
-        raise UnexpectedEmptyDictionaryError
-
-    cursor = conn.cursor()
-
-    columns = [_column_name(c) for c in list(data_dict.keys())]
-    values = list(data_dict.values())
-
-    placeholders = ", ".join(["?" for _ in values])
-    columns_str = ", ".join(columns)
+    select_parts = [
+        f"{agg_func}({column_name}) as {alias}"
+        for agg_func, column_name, alias in parsed_fields
+    ]
+    select_parts.append("COUNT(*) as count")
 
     query = (
-        f"INSERT OR IGNORE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+        f"SELECT {', '.join(select_parts)} "
+        f"FROM {_DEFAULT_TABLE_NAME} "
+        f"WHERE {_TS_COL} >= ? AND {_TS_COL} < ?"
     )
-    cursor.execute(query, values)
-    conn.commit()
-    if cursor.rowcount <= 0:
-        _logger.debug(
-            "Ignored insert into %s because the row already exists",
-            table_name,
-        )
-        return None
-    return cursor.lastrowid
-
-
-def _has_unique_ts_index(
-    conn: sqlite3.Connection,
-    table_name: str,
-) -> bool:
-    cursor = conn.cursor()
-    cursor.execute(f"PRAGMA index_list({table_name})")
-    for _, index_name, is_unique, *_ in cursor.fetchall():
-        if not is_unique:
-            continue
-        cursor.execute(f"PRAGMA index_info({index_name})")
-        indexed_columns = [row[2] for row in cursor.fetchall()]
-        if indexed_columns == [_TS_COL]:
-            return True
-    return False
-
-
-def _deduplicate_timestamps(
-    conn: sqlite3.Connection,
-    table_name: str,
-) -> int:
-    cursor = conn.cursor()
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    columns = [row[1] for row in cursor.fetchall()]
-    value_columns = [column for column in columns if column != _TS_COL]
-
-    cursor.execute(
-        f"SELECT {_TS_COL} FROM {table_name} "
-        f"WHERE {_TS_COL} IS NOT NULL "
-        f"GROUP BY {_TS_COL} HAVING COUNT(*) > 1",
-    )
-    duplicate_timestamps = [row[0] for row in cursor.fetchall()]
-
-    if not duplicate_timestamps:
-        return 0
-
-    removed_rows = 0
-    selected_columns = ", ".join([_TS_COL, *value_columns])
-    assignments = ", ".join(f"{column} = ?" for column in [_TS_COL, *value_columns])
-
-    for timestamp in duplicate_timestamps:
-        cursor.execute(
-            f"SELECT rowid, {selected_columns} FROM {table_name} "
-            f"WHERE {_TS_COL} = ? ORDER BY rowid",
-            (timestamp,),
-        )
-        rows = cursor.fetchall()
-        keep_rowid = rows[0][0]
-        merged_row: list[str | float | int | None] = []
-
-        for column_index in range(1, len(columns) + 1):
-            merged_value = next(
-                (
-                    row[column_index]
-                    for row in reversed(rows)
-                    if row[column_index] is not None
-                ),
-                None,
-            )
-            merged_row.append(merged_value)
-
-        cursor.execute(
-            f"UPDATE {table_name} SET {assignments} WHERE rowid = ?",
-            [*merged_row, keep_rowid],
-        )
-
-        duplicate_rowids = [(row[0],) for row in rows[1:]]
-        cursor.executemany(
-            f"DELETE FROM {table_name} WHERE rowid = ?",
-            duplicate_rowids,
-        )
-        removed_rows += len(duplicate_rowids)
-
-    return removed_rows
-
-
-def _ensure_unique_ts_index(
-    db_path: str,
-    table_name: str = _DEFAULT_TABLE_NAME,
-) -> None:
-    """Add a UNIQUE index on ts for existing databases that lack one."""
-    with closing(_connect_database(db_path, read_only=False)) as conn:
-        if _has_unique_ts_index(conn, table_name):
-            return
-
-        try:
-            conn.execute(_unique_ts_index_sql(table_name))
-        except sqlite3.IntegrityError:
-            removed_rows = _deduplicate_timestamps(conn, table_name)
-            _logger.warning(
-                "Removed %s duplicate observations while adding a UNIQUE index on %s",
-                removed_rows,
-                _TS_COL,
-            )
-            conn.execute(_unique_ts_index_sql(table_name))
-        conn.commit()
-
-
-def insert_observation(
-    db_path: str,
-    observation: Observation,
-) -> None:
-    prepared_observation = _prepare_observation(observation)
-    _validate_observation(prepared_observation)
-    with closing(_connect_database(db_path, read_only=False)) as conn:
-        _ensure_columns(conn, set(prepared_observation.keys()))
-        _insert_dict_row(conn, _DEFAULT_TABLE_NAME, prepared_observation)
-
-
-def query_db_metrics(db_path: str) -> DbMetrics:
-    """Query database for summary metrics."""
-    db_file = Path(db_path)
-    file_size = db_file.stat().st_size if db_file.exists() else 0
 
     with closing(
         _connect_database(db_path, read_only=True, use_row_factory=True),
     ) as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) as cnt FROM {_DEFAULT_TABLE_NAME}")
-        row_count = cursor.fetchone()["cnt"]
+        cursor = conn.cursor().execute(query, (start_ts, end_ts))
+        row: AggregatedRow = dict(cursor.fetchone())
 
-        cursor.execute(
-            f"SELECT MIN({_TS_COL}) as earliest, MAX({_TS_COL}) as latest "
-            f"FROM {_DEFAULT_TABLE_NAME}",
-        )
-        ts_row = cursor.fetchone()
-
-        cursor.execute(f"PRAGMA table_info({_DEFAULT_TABLE_NAME})")
-        column_count = len(cursor.fetchall())
-
-    return {
-        "row_count": row_count,
-        "db_file_size_bytes": file_size,
-        "earliest_ts": ts_row["earliest"],
-        "latest_ts": ts_row["latest"],
-        "column_count": column_count,
-    }
-
-
-def query_latest_timestamp(db_path: str) -> str | None:
-    """Return the most recent observation timestamp, or None if empty."""
-    with closing(
-        _connect_database(db_path, read_only=True, use_row_factory=True),
-    ) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT MAX({_TS_COL}) as latest FROM {_DEFAULT_TABLE_NAME}",
-        )
-        row = cursor.fetchone()
-        return row["latest"] if row else None
+    return {"start": start_ts, "end": end_ts, **row}
 
 
 def query_daily_aggregated_data(
