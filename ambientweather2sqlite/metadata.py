@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from http.client import HTTPException
 from pathlib import Path

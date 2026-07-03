@@ -5,9 +5,22 @@ from pathlib import Path
 
 from .configuration import create_config_file, get_config_path, load_config
 from .daemon import fetch_once, start_daemon
-from .database import create_database_if_not_exists, query_db_metrics
+from .database import (
+    create_database_if_not_exists,
+    export_observations,
+    query_db_metrics,
+    query_observation_gaps,
+)
 
-_SUBCOMMANDS = {"serve", "config", "once", "status", "install-launchd"}
+_SUBCOMMANDS = {
+    "serve",
+    "config",
+    "once",
+    "status",
+    "export",
+    "install-launchd",
+    "install-systemd",
+}
 _TOP_LEVEL_HELP_FLAGS = {"-h", "--help"}
 
 
@@ -49,6 +62,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         help="Port number for the HTTP JSON API server.",
     )
+    serve_parser.add_argument(
+        "--host",
+        help="Bind address for the HTTP JSON API server (default: localhost).",
+    )
     _add_config_arg(serve_parser)
     serve_parser.add_argument(
         "--log-format",
@@ -77,6 +94,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Show last observation, row count, and DB file size.",
     )
     _add_config_arg(status_parser)
+    status_parser.add_argument(
+        "--gap-hours",
+        type=int,
+        default=24,
+        help="Window (in hours) to scan for observation gaps (default: 24).",
+    )
+    status_parser.add_argument(
+        "--gap-threshold",
+        type=float,
+        default=180.0,
+        help="Minimum seconds between observations to report a gap (default: 180).",
+    )
+
+    # export
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Export observations as CSV or JSON.",
+    )
+    _add_config_arg(export_parser)
+    export_parser.add_argument(
+        "--format",
+        dest="export_format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Output format (default: csv).",
+    )
+    export_parser.add_argument(
+        "--start",
+        help="Only include observations at or after this UTC timestamp "
+        "(e.g. 2026-01-01 or '2026-01-01 12:00:00').",
+    )
+    export_parser.add_argument(
+        "--end",
+        help="Only include observations before this UTC timestamp (exclusive).",
+    )
+    export_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Output file path (default: stdout).",
+    )
 
     # install-launchd
     launchd_parser = subparsers.add_parser(
@@ -84,6 +141,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Generate a macOS launchd service plist file.",
     )
     _add_config_arg(launchd_parser)
+
+    # install-systemd
+    systemd_parser = subparsers.add_parser(
+        "install-systemd",
+        help="Generate a systemd user service unit file.",
+    )
+    _add_config_arg(systemd_parser)
 
     return parser.parse_args(raw_args)
 
@@ -103,6 +167,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         database_path=config.database_path,
         port=args.port if args.port is not None else config.port,
         log_format=args.log_format or config.log_format,
+        host=args.host or config.host,
+        auth_token=config.auth_token,
+        mqtt_config=config.mqtt,
     )
 
 
@@ -125,7 +192,40 @@ def _cmd_status(args: argparse.Namespace) -> None:
         print(f"Database not found at {config.database_path}")
         sys.exit(1)
     metrics = query_db_metrics(config.database_path)
-    print(json.dumps(metrics, indent=2))
+    gaps = query_observation_gaps(
+        config.database_path,
+        hours=args.gap_hours,
+        threshold_seconds=args.gap_threshold,
+    )
+    print(json.dumps({**metrics, "gaps": gaps}, indent=2))
+
+
+def _cmd_export(args: argparse.Namespace) -> None:
+    config_path = _resolve_config(args)
+    config = load_config(config_path)
+    if not Path(config.database_path).exists():
+        print(f"Database not found at {config.database_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.output is None:
+        export_observations(
+            config.database_path,
+            sys.stdout,
+            fmt=args.export_format,
+            start=args.start,
+            end=args.end,
+        )
+        return
+
+    with args.output.open("w", encoding="utf-8", newline="") as output:
+        row_count = export_observations(
+            config.database_path,
+            output,
+            fmt=args.export_format,
+            start=args.start,
+            end=args.end,
+        )
+    print(f"Exported {row_count} observations to {args.output}")
 
 
 def _cmd_install_launchd(args: argparse.Namespace) -> None:
@@ -133,6 +233,13 @@ def _cmd_install_launchd(args: argparse.Namespace) -> None:
 
     config_path = _resolve_config(args)
     install_launchd(config_path)
+
+
+def _cmd_install_systemd(args: argparse.Namespace) -> None:
+    from .systemd import install_systemd
+
+    config_path = _resolve_config(args)
+    install_systemd(config_path)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -146,8 +253,12 @@ def main(argv: list[str] | None = None) -> None:
             _cmd_once(args)
         case "status":
             _cmd_status(args)
+        case "export":
+            _cmd_export(args)
         case "install-launchd":
             _cmd_install_launchd(args)
+        case "install-systemd":
+            _cmd_install_systemd(args)
 
 
 if __name__ == "__main__":

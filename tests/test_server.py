@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest import TestCase
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from ambientweather2sqlite.database import (
     create_database_if_not_exists,
@@ -256,3 +256,158 @@ class TestTzFromQuery(TestCase):
 
         with self.assertRaises(InvalidTimezoneError):
             _tz_from_query({"tz": []})
+
+
+class TestRangeEndpoint(TestCase):
+    def setUp(self):
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+        Path(self.db_path).unlink(missing_ok=True)
+        create_database_if_not_exists(self.db_path)
+
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-01 10:00:00", "outTemp": 70.0},
+        )
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-01 11:00:00", "outTemp": 74.0},
+        )
+
+        self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
+        self.server.start()
+        self.port = self.server.httpd.server_address[1]
+
+    def tearDown(self):
+        self.server.shutdown()
+        Path(self.db_path).unlink(missing_ok=True)
+
+    def _get_json(self, path: str) -> dict:
+        with urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=2) as response:
+            return json.load(response)
+
+    def test_range_returns_aggregates(self):
+        data = self._get_json(
+            "/range?tz=UTC&q=avg_outTemp&start=2026-01-01&end=2026-01-02",
+        )
+
+        self.assertEqual(data["data"]["count"], 2)
+        self.assertEqual(data["data"]["avg_outTemp"], 72.0)
+        self.assertEqual(data["data"]["start"], "2026-01-01 00:00:00")
+        self.assertEqual(data["data"]["end"], "2026-01-02 00:00:00")
+
+    def test_range_requires_start(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self._get_json("/range?tz=UTC&q=avg_outTemp")
+
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_range_requires_tz(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self._get_json("/range?q=avg_outTemp&start=2026-01-01")
+
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_range_rejects_invalid_aggregation_field(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self._get_json("/range?tz=UTC&q=bogus_outTemp&start=2026-01-01")
+
+        self.assertEqual(ctx.exception.code, 400)
+
+
+class TestAuthToken(TestCase):
+    def setUp(self):
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+        Path(self.db_path).unlink(missing_ok=True)
+        create_database_if_not_exists(self.db_path)
+
+        self.server = Server(
+            "http://127.0.0.1:9",
+            self.db_path,
+            0,
+            "127.0.0.1",
+            "sekrit",
+        )
+        self.server.start()
+        self.port = self.server.httpd.server_address[1]
+
+    def tearDown(self):
+        self.server.shutdown()
+        Path(self.db_path).unlink(missing_ok=True)
+
+    def _get(self, path: str, token: str | None = None) -> dict:
+        request = Request(f"http://127.0.0.1:{self.port}{path}")
+        if token is not None:
+            request.add_header("Authorization", f"Bearer {token}")
+        with urlopen(request, timeout=2) as response:
+            return json.load(response)
+
+    def test_request_without_token_is_rejected(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self._get("/health")
+
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_request_with_wrong_token_is_rejected(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self._get("/health", token="wrong")
+
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_request_with_correct_token_succeeds(self):
+        data = self._get("/health", token="sekrit")
+
+        self.assertEqual(data["status"], "ok")
+
+
+class TestPrometheusMetricsEndpoint(TestCase):
+    def setUp(self):
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+        Path(self.db_path).unlink(missing_ok=True)
+        create_database_if_not_exists(self.db_path)
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-01 12:00:00", "outTemp": 72.5},
+        )
+
+        self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
+        self.server.start()
+        self.port = self.server.httpd.server_address[1]
+
+    def tearDown(self):
+        self.server.shutdown()
+        Path(self.db_path).unlink(missing_ok=True)
+
+    def _get(self, path: str, accept: str | None = None) -> tuple[str, str]:
+        request = Request(f"http://127.0.0.1:{self.port}{path}")
+        if accept is not None:
+            request.add_header("Accept", accept)
+        with urlopen(request, timeout=2) as response:
+            return response.read().decode("utf-8"), response.headers["Content-type"]
+
+    def test_format_query_param_returns_prometheus_text(self):
+        body, content_type = self._get("/metrics?format=prometheus")
+
+        self.assertIn("text/plain", content_type)
+        self.assertIn("aw2sqlite_observations_total 1", body)
+        self.assertIn('aw2sqlite_sensor_value{sensor="outTemp"} 72.5', body)
+
+    def test_prometheus_accept_header_returns_prometheus_text(self):
+        body, content_type = self._get(
+            "/metrics",
+            accept="application/openmetrics-text;version=1.0.0,text/plain;version=0.0.4",
+        )
+
+        self.assertIn("text/plain", content_type)
+        self.assertIn("aw2sqlite_observations_total 1", body)
+
+    def test_default_remains_json(self):
+        body, content_type = self._get("/metrics")
+
+        self.assertIn("application/json", content_type)
+        self.assertEqual(json.loads(body)["row_count"], 1)

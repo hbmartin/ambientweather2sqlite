@@ -37,6 +37,93 @@ class TestConfiguration(TestCase):
 
         self.assertIsNone(config.port)
 
+    def test_load_config_defaults_for_host_auth_and_mqtt(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertEqual(config.host, "localhost")
+        self.assertIsNone(config.auth_token)
+        self.assertIsNone(config.mqtt)
+
+    def test_load_config_parses_host_and_auth_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                'host = "0.0.0.0"\n'
+                'auth_token = "sekrit"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertEqual(config.host, "0.0.0.0")
+        self.assertEqual(config.auth_token, "sekrit")
+
+    def test_load_config_parses_mqtt_table(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[mqtt]\n"
+                'host = "broker.local"\n'
+                'topic = "weather/observations"\n'
+                "port = 8883\n"
+                'username = "user"\n'
+                'password = "pass"\n'
+                "tls = true\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        assert config.mqtt is not None
+        self.assertEqual(config.mqtt.host, "broker.local")
+        self.assertEqual(config.mqtt.topic, "weather/observations")
+        self.assertEqual(config.mqtt.port, 8883)
+        self.assertEqual(config.mqtt.username, "user")
+        self.assertEqual(config.mqtt.password, "pass")
+        self.assertTrue(config.mqtt.tls)
+        self.assertEqual(config.mqtt.client_id, "aw2sqlite")
+
+    def test_load_config_rejects_mqtt_without_topic(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[mqtt]\n"
+                'host = "broker.local"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(TypeError):
+                load_config(config_path)
+
+    def test_load_config_rejects_non_string_host(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "host = 8080\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(TypeError):
+                load_config(config_path)
+
     def test_load_config_rejects_non_string_live_data_url(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"

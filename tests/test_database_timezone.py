@@ -8,12 +8,12 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from ambientweather2sqlite.database import (
-    _validate_timezone,
     create_database_if_not_exists,
     insert_observation,
     query_daily_aggregated_data,
     query_hourly_aggregated_data,
 )
+from ambientweather2sqlite.database.aggregation import _validate_timezone
 from ambientweather2sqlite.exceptions import (
     InvalidDateError,
     InvalidDateRangeError,
@@ -244,7 +244,7 @@ class TestDatabaseTimezone(TestCase):
 
         self.assertEqual(result, {str(self.tomorrow): [None] * 24})
 
-    @patch("ambientweather2sqlite.database._current_date_for_timezone")
+    @patch("ambientweather2sqlite.database.aggregation._current_date_for_timezone")
     def test_query_hourly_aggregated_data_clamps_implicit_end_date_to_start_date(
         self,
         mock_current_date,

@@ -3,7 +3,14 @@ in-tree by Linux systems software and other lightweight applications.
 
 mureq is copyright 2021 by its contributors and is released under the
 0BSD ("zero-clause BSD") license.
+
+Vendored from https://github.com/slingamn/mureq (upstream version 0.3.0)
+with local modifications: type annotations, PEP 695 type aliases, an
+``auto_retry`` option, and ruff/formatting cleanups. When updating, diff
+against the upstream single-file module rather than replacing wholesale.
 """
+
+from __future__ import annotations
 
 import contextlib
 import io

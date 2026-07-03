@@ -119,6 +119,9 @@ class TestMainServe(TestCase):
             database_path="weather.db",
             port=8080,
             log_format="json",
+            host="localhost",
+            auth_token=None,
+            mqtt_config=None,
         )
 
     @patch("ambientweather2sqlite.__main__.start_daemon")
@@ -151,6 +154,9 @@ class TestMainServe(TestCase):
             database_path="weather.db",
             port=8080,
             log_format="text",
+            host="localhost",
+            auth_token=None,
+            mqtt_config=None,
         )
 
 
@@ -194,6 +200,7 @@ class TestMainConfig(TestCase):
 
 class TestMainStatus(TestCase):
     @patch("builtins.print")
+    @patch("ambientweather2sqlite.__main__.query_observation_gaps")
     @patch("ambientweather2sqlite.__main__.query_db_metrics")
     @patch("ambientweather2sqlite.__main__.load_config")
     @patch("ambientweather2sqlite.__main__.create_config_file")
@@ -204,6 +211,7 @@ class TestMainStatus(TestCase):
         mock_create_config_file: Mock,
         mock_load_config: Mock,
         mock_query_db_metrics: Mock,
+        mock_query_observation_gaps: Mock,
         mock_print: Mock,
     ):
         config_path = Path("config.toml")
@@ -221,12 +229,20 @@ class TestMainStatus(TestCase):
             database_path="weather.db",
         )
         mock_query_db_metrics.return_value = metrics
+        mock_query_observation_gaps.return_value = []
 
         with patch("ambientweather2sqlite.__main__.Path.exists", return_value=True):
             main(["status"])
 
         mock_query_db_metrics.assert_called_once_with("weather.db")
-        mock_print.assert_called_once_with(json.dumps(metrics, indent=2))
+        mock_query_observation_gaps.assert_called_once_with(
+            "weather.db",
+            hours=24,
+            threshold_seconds=180.0,
+        )
+        mock_print.assert_called_once_with(
+            json.dumps({**metrics, "gaps": []}, indent=2),
+        )
 
 
 class TestMainInstallLaunchd(TestCase):

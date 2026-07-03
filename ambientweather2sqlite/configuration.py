@@ -1,7 +1,7 @@
 import tomllib
 from pathlib import Path
 
-from .models import AppConfig
+from .models import AppConfig, MqttConfig
 
 _CURRENT_PATH = Path.cwd()
 _DEFAULT_CONFIG_NAME = "aw2sqlite.toml"
@@ -50,6 +50,47 @@ def _optional_log_format(config_data: dict[str, object]) -> str:
     return value
 
 
+def _optional_str_or_none(config_data: dict[str, object], key: str) -> str | None:
+    value = config_data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise _config_type_error(key, "a string")
+    return value
+
+
+def _optional_bool(
+    config_data: dict[str, object],
+    key: str,
+    *,
+    default: bool,
+) -> bool:
+    value = config_data.get(key, default)
+    if not isinstance(value, bool):
+        raise _config_type_error(key, "a boolean")
+    return value
+
+
+def _optional_mqtt(config_data: dict[str, object]) -> MqttConfig | None:
+    mqtt_data = config_data.get("mqtt")
+    if mqtt_data is None:
+        return None
+    if not isinstance(mqtt_data, dict):
+        raise _config_type_error("mqtt", "a table")
+    mqtt_table: dict[str, object] = {
+        str(key): value for key, value in mqtt_data.items()
+    }
+    return MqttConfig(
+        host=_require_str(mqtt_table, "host"),
+        topic=_require_str(mqtt_table, "topic"),
+        port=_optional_int(mqtt_table, "port") or 1883,
+        username=_optional_str_or_none(mqtt_table, "username"),
+        password=_optional_str_or_none(mqtt_table, "password"),
+        client_id=_optional_str(mqtt_table, "client_id", "aw2sqlite"),
+        tls=_optional_bool(mqtt_table, "tls", default=False),
+    )
+
+
 def load_config(config_path: Path) -> AppConfig:
     config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     return AppConfig(
@@ -57,6 +98,9 @@ def load_config(config_path: Path) -> AppConfig:
         database_path=_require_str(config_data, "database_path"),
         port=_optional_int(config_data, "port"),
         log_format=_optional_log_format(config_data),
+        host=_optional_str(config_data, "host", "localhost"),
+        auth_token=_optional_str_or_none(config_data, "auth_token"),
+        mqtt=_optional_mqtt(config_data),
     )
 
 

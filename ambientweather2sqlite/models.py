@@ -16,11 +16,25 @@ type QueryParams = dict[str, list[str]]
 
 
 @dataclass(frozen=True, slots=True)
+class MqttConfig:
+    host: str
+    topic: str
+    port: int = 1883
+    username: str | None = None
+    password: str | None = None
+    client_id: str = "aw2sqlite"
+    tls: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     live_data_url: str
     database_path: str
     port: int | None = None
     log_format: str = "text"
+    host: str = "localhost"
+    auth_token: str | None = None
+    mqtt: MqttConfig | None = None
 
 
 class LiveDataMetadata(TypedDict):
@@ -38,6 +52,10 @@ class DailyAggregatedPayload(TypedDict):
 
 class HourlyAggregatedPayload(TypedDict):
     data: HourlyAggregatedData
+
+
+class RangeAggregatedPayload(TypedDict):
+    data: AggregatedRow
 
 
 class ErrorPayload(TypedDict):
@@ -58,10 +76,19 @@ class DbMetrics(TypedDict):
     column_count: int
 
 
+class ObservationGap(TypedDict):
+    """A span without observations; `end` is None when the gap is ongoing."""
+
+    start: str
+    end: str | None
+    duration_seconds: float
+
+
 type JsonResponse = (
     LiveDataPayload
     | DailyAggregatedPayload
     | HourlyAggregatedPayload
+    | RangeAggregatedPayload
     | ErrorPayload
     | HealthPayload
     | DbMetrics
@@ -86,6 +113,12 @@ def build_daily_aggregated_payload(
 def build_hourly_aggregated_payload(
     data: HourlyAggregatedData,
 ) -> HourlyAggregatedPayload:
+    return {"data": data}
+
+
+def build_range_aggregated_payload(
+    data: AggregatedRow,
+) -> RangeAggregatedPayload:
     return {"data": data}
 
 

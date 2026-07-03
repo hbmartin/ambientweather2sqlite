@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING, override
 
@@ -149,9 +151,12 @@ class UnitsHTMLParser(HTMLParser):
 
         # Check if we have found an <option> tag that is selected.
         # This must happen after a valid unit label has been identified.
-        elif tag == "option" and self._current_unit_label is not None:
-            if "selected" in attributes:
-                self._is_in_selected_option = True
+        elif (
+            tag == "option"
+            and self._current_unit_label is not None
+            and "selected" in attributes
+        ):
+            self._is_in_selected_option = True
 
     @override
     def handle_endtag(self, tag: str) -> None:
@@ -173,21 +178,24 @@ class UnitsHTMLParser(HTMLParser):
             self._current_unit_label = data.strip()
 
         # If we are inside a selected option for a tracked unit, extract its text.
-        elif self._is_in_selected_option and self._current_unit_label:
-            if unit_value := data.strip():
-                # Map the found label (e.g., "Solar Radiation") to the Enum member
-                unit_enum_member = next(
-                    (
-                        member
-                        for member in Units
-                        if member.value == self._current_unit_label
-                    ),
-                    None,
-                )
-                if unit_enum_member:
-                    self.extracted_units[unit_enum_member] = unit_value
-                # Reset the flag to ensure we only capture one value.
-                self._is_in_selected_option = False
+        elif (
+            self._is_in_selected_option
+            and self._current_unit_label
+            and (unit_value := data.strip())
+        ):
+            # Map the found label (e.g., "Solar Radiation") to the Enum member
+            unit_enum_member = next(
+                (
+                    member
+                    for member in Units
+                    if member.value == self._current_unit_label
+                ),
+                None,
+            )
+            if unit_enum_member:
+                self.extracted_units[unit_enum_member] = unit_value
+            # Reset the flag to ensure we only capture one value.
+            self._is_in_selected_option = False
 
 
 def extract_units(html_content: str) -> dict[Units, str]:
