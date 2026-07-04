@@ -68,6 +68,23 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
         was_created = create_database_if_not_exists(self.db_path)
         self.assertFalse(was_created)
 
+    def test_create_database_if_not_exists_initializes_empty_file(self):
+        """Test with an existing but empty database file."""
+        Path(self.db_path).touch()
+
+        was_created = create_database_if_not_exists(self.db_path)
+
+        self.assertTrue(was_created)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='observations'",
+            )
+            result = cursor.fetchone()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], "observations")
+
     def test_observations_table_structure(self):
         """Test that observations table has correct structure."""
         create_database_if_not_exists(self.db_path)
@@ -262,6 +279,25 @@ class TestDatabaseUtilityFunctions(unittest.TestCase):
             self.assertIn("column_with_spaces", column_names)
             self.assertIn("column_with_dashes", column_names)
             self.assertIn("column_with_dots", column_names)
+
+    def test_repeated_insert_with_special_column_names_reuses_sanitized_columns(self):
+        create_database_if_not_exists(self.db_path)
+
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-01 12:00:00", "sensor-name": 1.0},
+        )
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-01 12:01:00", "sensor-name": 2.0},
+        )
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT sensor_name FROM observations ORDER BY ts")
+            values = [row[0] for row in cursor.fetchall()]
+
+        self.assertEqual(values, [1.0, 2.0])
 
 
 if __name__ == "__main__":

@@ -17,6 +17,22 @@ from ambientweather2sqlite.database import (
 from ambientweather2sqlite.server import Server, _tz_from_query, create_request_handler
 
 
+def _wait_for_server_ready(
+    test_case: TestCase,
+    port: int,
+    timeout: float = 2.0,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                return
+        except OSError:
+            if time.monotonic() >= deadline:
+                test_case.fail(f"Server did not become ready within {timeout} seconds")
+            time.sleep(0.01)
+
+
 class TestServer(TestCase):
     def setUp(self):
         self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -39,7 +55,7 @@ class TestServer(TestCase):
         self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
         self.server.start()
         self.port = self.server.httpd.server_address[1]
-        self._wait_for_server_ready()
+        _wait_for_server_ready(self, self.port)
 
     def tearDown(self):
         self.server.shutdown()
@@ -61,15 +77,7 @@ class TestServer(TestCase):
             return e.code, body
 
     def _wait_for_server_ready(self, timeout: float = 2.0) -> None:
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                with socket.create_connection(("127.0.0.1", self.port), timeout=0.1):
-                    return
-            except OSError:
-                if time.monotonic() >= deadline:
-                    self.fail(f"Server did not become ready within {timeout} seconds")
-                time.sleep(0.01)
+        _wait_for_server_ready(self, self.port, timeout)
 
     def test_server_integration_hourly_data_supports_legacy_date_query(self):
         payload = self._get_json(
@@ -278,6 +286,7 @@ class TestRangeEndpoint(TestCase):
         self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
         self.server.start()
         self.port = self.server.httpd.server_address[1]
+        _wait_for_server_ready(self, self.port)
 
     def tearDown(self):
         self.server.shutdown()
@@ -333,6 +342,7 @@ class TestAuthToken(TestCase):
         )
         self.server.start()
         self.port = self.server.httpd.server_address[1]
+        _wait_for_server_ready(self, self.port)
 
     def tearDown(self):
         self.server.shutdown()
@@ -378,6 +388,7 @@ class TestPrometheusMetricsEndpoint(TestCase):
         self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
         self.server.start()
         self.port = self.server.httpd.server_address[1]
+        _wait_for_server_ready(self, self.port)
 
     def tearDown(self):
         self.server.shutdown()

@@ -65,17 +65,35 @@ def _ensure_columns(
     cursor.execute(f"PRAGMA table_info({table_name})")
     existing_columns = {row[1] for row in cursor.fetchall()}  # row[1] is column name
 
-    missing_columns = required_columns - existing_columns
+    required_column_names = {
+        _column_name(column_name) for column_name in required_columns
+    }
+    missing_columns = required_column_names - existing_columns
 
     for column_name in missing_columns:
-        valid_column_name = _column_name(column_name)
-        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {valid_column_name} REAL")
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} REAL")
         added_columns.append(column_name)
 
     cursor.close()
     conn.commit()
 
     return added_columns
+
+
+def _table_exists(db_path: str, table_name: str) -> bool:
+    if not Path(db_path).exists():
+        return False
+
+    try:
+        with closing(_connect_database(db_path, read_only=True)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table_name,),
+            )
+            return cursor.fetchone() is not None
+    except sqlite3.Error:
+        return False
 
 
 def create_database_if_not_exists(
@@ -93,7 +111,7 @@ def create_database_if_not_exists(
         bool: True if database was created, False if it already existed
 
     """
-    if Path(db_path).exists():
+    if _table_exists(db_path, table_name):
         _ensure_unique_ts_index(db_path, table_name)
         return False
 
@@ -101,7 +119,7 @@ def create_database_if_not_exists(
         cursor = conn.cursor()
 
         table_schema = f"""
-            CREATE TABLE {table_name} (
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 {_TS_COL} TIMESTAMP DEFAULT ({_SQLITE_TS_DEFAULT})
             )
         """

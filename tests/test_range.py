@@ -1,6 +1,8 @@
 import tempfile
+from datetime import datetime, tzinfo
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 from ambientweather2sqlite.database import (
     create_database_if_not_exists,
@@ -11,6 +13,7 @@ from ambientweather2sqlite.exceptions import (
     InvalidDateError,
     InvalidDateRangeError,
     InvalidFormatError,
+    InvalidTimezoneError,
 )
 
 
@@ -38,6 +41,14 @@ class TestQueryRangeAggregatedData(TestCase):
 
     def tearDown(self):
         Path(self.db_path).unlink(missing_ok=True)
+
+    def _fixed_now(self) -> type[datetime]:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz: tzinfo | None = None) -> datetime:
+                return datetime(2026, 1, 3, tzinfo=tz)
+
+        return FixedDateTime
 
     def test_aggregates_over_window(self):
         result = query_range_aggregated_data(
@@ -80,12 +91,13 @@ class TestQueryRangeAggregatedData(TestCase):
         self.assertEqual(result["avg_outTemp"], 74.0)
 
     def test_end_defaults_to_now(self):
-        result = query_range_aggregated_data(
-            self.db_path,
-            ["avg_outTemp"],
-            start="2026-01-01",
-            tz="UTC",
-        )
+        with patch("ambientweather2sqlite.database.aggregation.datetime", self._fixed_now()):
+            result = query_range_aggregated_data(
+                self.db_path,
+                ["avg_outTemp"],
+                start="2026-01-01",
+                tz="UTC",
+            )
 
         self.assertEqual(result["count"], 3)
 
@@ -127,4 +139,13 @@ class TestQueryRangeAggregatedData(TestCase):
                 ["explode_outTemp"],
                 start="2026-01-01",
                 tz="UTC",
+            )
+
+    def test_extreme_numeric_timezone_raises_invalid_timezone(self):
+        with self.assertRaises(InvalidTimezoneError):
+            query_range_aggregated_data(
+                self.db_path,
+                ["avg_outTemp"],
+                start="2026-01-01",
+                tz="2400",
             )

@@ -67,6 +67,10 @@ def _encode_string(value: str) -> bytes:
 
 
 def _connect_packet(config: MqttConfig) -> bytes:
+    if config.password is not None and config.username is None:
+        msg = "MQTT password requires username"
+        raise MqttError(msg)
+
     connect_flags = 0x02  # clean session
     payload = _encode_string(config.client_id)
     if config.username is not None:
@@ -91,8 +95,18 @@ def _publish_packet(topic: str, payload: bytes) -> bytes:
     return bytes([_PUBLISH]) + _encode_remaining_length(len(body)) + body
 
 
+def _read_exact(sock: socket.socket, length: int) -> bytes:
+    response = bytearray()
+    while len(response) < length:
+        chunk = sock.recv(length - len(response))
+        if not chunk:
+            break
+        response.extend(chunk)
+    return bytes(response)
+
+
 def _read_connack(sock: socket.socket) -> None:
-    response = sock.recv(_CONNACK_LENGTH)
+    response = _read_exact(sock, _CONNACK_LENGTH)
     if len(response) < _CONNACK_LENGTH or response[0] != _CONNACK:
         raise MqttProtocolError
     return_code = response[3]

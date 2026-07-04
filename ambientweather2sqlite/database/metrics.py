@@ -20,6 +20,14 @@ if TYPE_CHECKING:
     from ambientweather2sqlite.models import DbMetrics, Observation, ObservationGap
 
 
+def _normalize_current_time(now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(UTC)
+    if now.tzinfo is None or now.utcoffset() is None:
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
+
+
 def query_db_metrics(db_path: str) -> DbMetrics:
     """Query database for summary metrics."""
     db_file = Path(db_path)
@@ -89,7 +97,7 @@ def query_observation_gaps(
     `threshold_seconds`. A trailing gap (latest observation to now) is
     reported with `end` set to None, meaning the gap is ongoing.
     """
-    current_time = now if now is not None else datetime.now(UTC)
+    current_time = _normalize_current_time(now)
     window_start = _format_sqlite_timestamp(current_time - timedelta(hours=hours))
 
     with closing(
@@ -102,6 +110,13 @@ def query_observation_gaps(
             (window_start,),
         )
         timestamps: list[str] = [row[0] for row in cursor.fetchall()]
+        cursor.execute(
+            f"SELECT {_TS_COL} FROM {_DEFAULT_TABLE_NAME} "
+            f"WHERE {_TS_COL} < ? ORDER BY {_TS_COL} DESC LIMIT 1",
+            (window_start,),
+        )
+        if prev_row := cursor.fetchone():
+            timestamps.insert(0, prev_row[0])
 
     gaps: list[ObservationGap] = []
     parsed = [(raw, _parse_stored_timestamp(raw)) for raw in timestamps]

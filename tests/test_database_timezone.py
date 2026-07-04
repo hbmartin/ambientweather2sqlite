@@ -1,7 +1,7 @@
 import sqlite3
 import tempfile
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -14,11 +14,25 @@ from ambientweather2sqlite.database import (
     query_hourly_aggregated_data,
 )
 from ambientweather2sqlite.database.aggregation import _validate_timezone
+from ambientweather2sqlite.database.connection import _format_sqlite_timestamp
 from ambientweather2sqlite.exceptions import (
     InvalidDateError,
     InvalidDateRangeError,
     InvalidTimezoneError,
 )
+
+
+class TestSqliteTimestampFormatting(TestCase):
+    def test_format_sqlite_timestamp_preserves_microseconds(self):
+        value = datetime(2026, 1, 1, 12, 0, 0, 123456, tzinfo=UTC)
+
+        result = _format_sqlite_timestamp(value)
+
+        self.assertEqual(result, "2026-01-01 12:00:00.123456")
+
+    def test_format_sqlite_timestamp_rejects_naive_datetime(self):
+        with self.assertRaises(ValueError):
+            _format_sqlite_timestamp(datetime.fromisoformat("2026-01-01T12:00:00"))
 
 
 class TestDatabaseTimezone(TestCase):
@@ -450,6 +464,10 @@ class TestDatabaseTimezone(TestCase):
         """Test _validate_timezone with offset without colon"""
         result = _validate_timezone("+0530")
         self.assertEqual(result, "5.5 hours")
+
+    def test_validate_timezone_rejects_extreme_offset_without_colon(self):
+        with self.assertRaises(InvalidTimezoneError):
+            _validate_timezone("2400")
 
     def test_validate_timezone_offset_negative_hours_no_separator(self):
         """Test _validate_timezone with negative hours"""

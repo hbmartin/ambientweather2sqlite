@@ -9,6 +9,7 @@ from ambientweather2sqlite.mqtt import (
     _encode_remaining_length,
     _encode_string,
     _publish_packet,
+    _read_connack,
     publish,
 )
 
@@ -52,12 +53,36 @@ class TestPacketEncoding(TestCase):
         self.assertIn(b"\x00\x04user", packet)
         self.assertIn(b"\x00\x04pass", packet)
 
+    def test_connect_packet_rejects_password_without_username(self):
+        config = MqttConfig(host="broker", topic="t", password="pass")
+
+        with self.assertRaises(MqttError):
+            _connect_packet(config)
+
     def test_publish_packet_contains_topic_and_payload(self):
         packet = _publish_packet("weather/obs", b'{"outTemp": 72.5}')
 
         self.assertEqual(packet[0], 0x30)
         self.assertIn(b"weather/obs", packet)
         self.assertIn(b'{"outTemp": 72.5}', packet)
+
+
+class _FragmentedSocket:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+
+    def recv(self, size: int) -> bytes:
+        if not self.chunks:
+            return b""
+        chunk = self.chunks.pop(0)
+        return chunk[:size]
+
+
+class TestConnackReading(TestCase):
+    def test_read_connack_accepts_fragmented_response(self):
+        sock = _FragmentedSocket([b"\x20", b"\x02\x00", b"\x00"])
+
+        _read_connack(sock)
 
 
 class _FakeBroker:
@@ -75,10 +100,11 @@ class _FakeBroker:
         conn, _ = self._server.accept()
         with conn:
             conn.settimeout(2.0)
-            # Read the CONNECT packet (assumes single-byte remaining length)
-            header = conn.recv(2)
-            remaining = header[1]
-            conn.recv(remaining)
+            fixed_header = conn.recv(1)
+            if not fixed_header:
+                return
+            remaining = self._read_remaining_length(conn)
+            self._recv_exact(conn, remaining)
             conn.sendall(bytes([0x20, 0x02, 0x00, self.connack_code]))
             try:
                 while chunk := conn.recv(4096):
@@ -86,6 +112,26 @@ class _FakeBroker:
             except TimeoutError:
                 pass
         self._server.close()
+
+    def _read_remaining_length(self, conn: socket.socket) -> int:
+        multiplier = 1
+        value = 0
+        while True:
+            encoded = self._recv_exact(conn, 1)
+            digit = encoded[0]
+            value += (digit & 0x7F) * multiplier
+            if digit & 0x80 == 0:
+                return value
+            multiplier *= 128
+
+    def _recv_exact(self, conn: socket.socket, length: int) -> bytes:
+        data = bytearray()
+        while len(data) < length:
+            chunk = conn.recv(length - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        return bytes(data)
 
     def join(self) -> None:
         self._thread.join(timeout=5)

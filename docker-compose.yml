@@ -4,6 +4,9 @@
 #   mkdir -p data
 #   docker compose run --rm aw2sqlite config --config /data/aw2sqlite.toml
 #
+# The image runs as UID/GID 1001, so bind-mounted ./data must be writable by
+# that user on Linux hosts.
+#
 # The container binds the API server to 0.0.0.0 so the port mapping below
 # works; set `auth_token` in the config if the port is reachable by others.
 services:
