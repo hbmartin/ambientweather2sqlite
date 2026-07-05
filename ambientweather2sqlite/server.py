@@ -250,14 +250,17 @@ def create_request_handler(  # noqa: C901
             return "openmetrics" in accept or "text/plain" in accept
 
         def _send_prometheus_metrics(self) -> None:
-            metrics = query_db_metrics(self.DB_PATH)
-            latest_observation = query_latest_observation(self.DB_PATH)
-            payload = build_prometheus_metrics(metrics, latest_observation)
             try:
+                metrics = query_db_metrics(self.DB_PATH)
+                latest_observation = query_latest_observation(self.DB_PATH)
+                payload = build_prometheus_metrics(metrics, latest_observation)
                 self._set_headers(content_type=_PROMETHEUS_CONTENT_TYPE)
                 self.wfile.write(payload.encode("utf-8"))
             except BrokenPipeError:
                 self.log_message("%s", "BrokenPipeError")
+            except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
+                self._send_json(build_error_payload(str(e)), 500)
 
         def _send_metrics(self) -> None:
             query: QueryParams = parse_qs(urlparse(self.path).query)

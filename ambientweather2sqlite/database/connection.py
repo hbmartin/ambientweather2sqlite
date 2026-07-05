@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
@@ -40,7 +41,9 @@ def _connect_database(
     read_only: bool,
     use_row_factory: bool = False,
 ) -> sqlite3.Connection:
-    connect_target = f"file:{db_path}?mode=ro" if read_only else db_path
+    connect_target = (
+        f"{Path(db_path).resolve().as_uri()}?mode=ro" if read_only else db_path
+    )
     conn = sqlite3.connect(
         connect_target,
         uri=read_only,
@@ -53,13 +56,25 @@ def _connect_database(
     )
 
 
+def _is_timezone_aware(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
 def _format_sqlite_timestamp(value: datetime) -> str:
     """Store timestamps as UTC naive strings in SQLite's text format.
 
     Callers should pass timezone-aware datetimes because the value is converted to
     UTC before its tzinfo is stripped for storage.
     """
-    return value.astimezone(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    if not _is_timezone_aware(value):
+        msg = "value must be timezone-aware"
+        raise ValueError(msg)
+
+    utc_value = value.astimezone(UTC).replace(tzinfo=None)
+    timestamp_format = (
+        "%Y-%m-%d %H:%M:%S.%f" if utc_value.microsecond else "%Y-%m-%d %H:%M:%S"
+    )
+    return utc_value.strftime(timestamp_format)
 
 
 def _parse_stored_timestamp(value: str) -> datetime:

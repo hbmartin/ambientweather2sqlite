@@ -29,13 +29,24 @@ class TestSystemd(TestCase):
         self.assertIn("ExecStart=/usr/bin/python3 -m ambientweather2sqlite serve", unit)
 
     def test_generate_unit_quotes_paths_with_spaces(self):
+        config_path = Path("/tmp/my configs/test.toml")
         with (
             patch("ambientweather2sqlite.systemd.shutil.which", return_value=None),
             patch("ambientweather2sqlite.systemd.sys.executable", "/usr/bin/python3"),
         ):
-            unit = generate_unit(Path("/tmp/my configs/test.toml"))
+            unit = generate_unit(config_path)
 
-        self.assertIn("'/tmp/my configs/test.toml'", unit)
+        self.assertIn(f"'{config_path.resolve()}'", unit)
+
+    def test_generate_unit_escapes_percent_specifiers(self):
+        with (
+            patch("ambientweather2sqlite.systemd.shutil.which", return_value=None),
+            patch("ambientweather2sqlite.systemd.sys.executable", "/tmp/%h/python3"),
+        ):
+            unit = generate_unit(Path("/tmp/config%h.toml"))
+
+        self.assertIn("/tmp/%%h/python3", unit)
+        self.assertIn("/tmp/config%%h.toml", unit)
 
     @patch("ambientweather2sqlite.systemd.Path.home")
     def test_install_systemd_writes_unit_file(self, mock_home):

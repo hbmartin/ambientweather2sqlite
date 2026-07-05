@@ -169,14 +169,26 @@ class TestQueryObservationGaps(TestCase):
         self.assertIsNone(gaps[0]["end"])
         self.assertEqual(gaps[0]["duration_seconds"], 7200.0)
 
-    def test_ignores_observations_outside_window(self):
-        self._insert_at("2026-01-01 00:00:00")  # outside 24h window
-        self._insert_at("2026-01-02 11:59:00")
-        self._insert_at("2026-01-02 12:00:00")
+    def test_detects_ongoing_gap_that_started_before_window(self):
+        self._insert_at("2026-01-01 11:00:00")
 
         gaps = query_observation_gaps(self.db_path, hours=24, now=self.now)
 
-        self.assertEqual(gaps, [])
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["start"], "2026-01-01 11:00:00")
+        self.assertIsNone(gaps[0]["end"])
+        self.assertEqual(gaps[0]["duration_seconds"], 90000.0)
+
+    def test_normalizes_naive_now_to_utc(self):
+        self._insert_at("2026-01-02 10:00:00")
+
+        gaps = query_observation_gaps(
+            self.db_path,
+            now=datetime.fromisoformat("2026-01-02T12:00:00"),
+        )
+
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["duration_seconds"], 7200.0)
 
     def test_respects_custom_threshold(self):
         self._insert_at("2026-01-02 11:58:00")

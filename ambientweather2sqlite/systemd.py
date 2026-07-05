@@ -42,7 +42,7 @@ def _command_arguments(config_path: Path) -> list[str]:
 
 def generate_unit(config_path: Path) -> str:
     """Generate a systemd user service unit string."""
-    exec_start = shlex.join(_command_arguments(config_path))
+    exec_start = shlex.join(_command_arguments(config_path)).replace("%", "%%")
     return _UNIT_TEMPLATE.format(exec_start=exec_start)
 
 

@@ -58,6 +58,9 @@ docker compose run --rm aw2sqlite config --config /data/aw2sqlite.toml
 docker compose up -d
 ```
 
+The container runs as UID/GID `1001`; if you bind-mount `./data`, make sure that
+directory is writable by that user.
+
 The container starts the server bound to `0.0.0.0` so the published port is
 reachable; set `auth_token` in the config if others can reach that port.
 

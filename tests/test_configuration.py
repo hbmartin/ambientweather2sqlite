@@ -96,6 +96,25 @@ class TestConfiguration(TestCase):
         self.assertTrue(config.mqtt.tls)
         self.assertEqual(config.mqtt.client_id, "aw2sqlite")
 
+    def test_load_config_preserves_explicit_mqtt_port_zero(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[mqtt]\n"
+                'host = "broker.local"\n'
+                'topic = "weather/observations"\n'
+                "port = 0\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        assert config.mqtt is not None
+        self.assertEqual(config.mqtt.port, 0)
+
     def test_load_config_rejects_mqtt_without_topic(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"

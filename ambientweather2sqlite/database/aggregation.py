@@ -59,6 +59,10 @@ def _validate_timezone(tz: str | None) -> str | ZoneInfo:
     except ValueError:
         pass
     else:
+        try:
+            timezone_cls(timedelta(hours=offset_hours))
+        except (OverflowError, ValueError) as e:
+            raise InvalidTimezoneError(tz) from e
         return f"{offset_hours} hours"
 
     try:
@@ -292,8 +296,11 @@ def _local_isoformat_to_utc_timestamp(
     if timezone == "localtime":
         return _format_sqlite_timestamp(parsed.astimezone())
 
-    offset_hours = float(timezone.removesuffix(" hours"))
-    fixed_offset = timezone_cls(timedelta(hours=offset_hours))
+    try:
+        offset_hours = float(timezone.removesuffix(" hours"))
+        fixed_offset = timezone_cls(timedelta(hours=offset_hours))
+    except (OverflowError, ValueError) as e:
+        raise InvalidTimezoneError(timezone) from e
     return _format_sqlite_timestamp(parsed.replace(tzinfo=fixed_offset))
 
 
