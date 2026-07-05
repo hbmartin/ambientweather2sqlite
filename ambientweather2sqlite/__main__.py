@@ -2,7 +2,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import TextIO
 
 from .configuration import create_config_file, get_config_path, load_config
 from .daemon import fetch_once, start_daemon
@@ -23,13 +22,6 @@ _SUBCOMMANDS = {
     "install-systemd",
 }
 _TOP_LEVEL_HELP_FLAGS = {"-h", "--help"}
-
-
-def _export_stdout(fmt: str) -> TextIO:
-    reconfigure = getattr(sys.stdout, "reconfigure", None)
-    if fmt == "csv" and callable(reconfigure):
-        reconfigure(newline="")
-    return sys.stdout
 
 
 def _add_config_arg(parser: argparse.ArgumentParser) -> None:
@@ -218,14 +210,14 @@ def _cmd_export(args: argparse.Namespace) -> None:
     if args.output is None:
         export_observations(
             config.database_path,
-            _export_stdout(args.export_format),
+            sys.stdout,
             fmt=args.export_format,
             start=args.start,
             end=args.end,
         )
         return
 
-    with args.output.open("w", encoding="utf-8", newline="") as output:
+    with args.output.open("w", encoding="utf-8") as output:
         row_count = export_observations(
             config.database_path,
             output,

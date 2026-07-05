@@ -479,6 +479,11 @@ class TestDatabaseTimezone(TestCase):
         result = _validate_timezone("-05:30")
         self.assertEqual(result, "-5.5 hours")
 
+    def test_validate_timezone_offset_negative_zero_hours_colon_separator(self):
+        """Test _validate_timezone keeps the sign when hours are -0"""
+        result = _validate_timezone("-0:30")
+        self.assertEqual(result, "-0.5 hours")
+
     def test_validate_timezone_offset_negative_hours_period_separator(self):
         """Test _validate_timezone with negative hours"""
         result = _validate_timezone("-05.5")

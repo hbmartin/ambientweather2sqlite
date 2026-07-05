@@ -81,19 +81,22 @@ def _ensure_columns(
 
 
 def _table_exists(db_path: str, table_name: str) -> bool:
+    """Check for the table in an existing database file.
+
+    Real errors (locks, corruption, I/O) propagate rather than being treated
+    as "no table", which would misroute an existing database into the create
+    path and skip the unique-ts-index migration.
+    """
     if not Path(db_path).exists():
         return False
 
-    try:
-        with closing(_connect_database(db_path, read_only=True)) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (table_name,),
-            )
-            return cursor.fetchone() is not None
-    except sqlite3.Error:
-        return False
+    with closing(_connect_database(db_path, read_only=True)) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        )
+        return cursor.fetchone() is not None
 
 
 def create_database_if_not_exists(

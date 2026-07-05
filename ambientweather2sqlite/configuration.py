@@ -1,5 +1,6 @@
 import tomllib
 from pathlib import Path
+from typing import overload
 
 from .models import AppConfig, MqttConfig
 
@@ -19,6 +20,24 @@ def _require_str(config_data: dict[str, object], key: str) -> str:
     if not isinstance(value, str):
         raise _config_type_error(key, "a string")
     return value
+
+
+@overload
+def _optional_int(
+    config_data: dict[str, object],
+    key: str,
+    *,
+    default: int,
+) -> int: ...
+
+
+@overload
+def _optional_int(
+    config_data: dict[str, object],
+    key: str,
+    *,
+    default: None = None,
+) -> int | None: ...
 
 
 def _optional_int(
@@ -85,13 +104,10 @@ def _optional_mqtt(config_data: dict[str, object]) -> MqttConfig | None:
     mqtt_table: dict[str, object] = {
         str(key): value for key, value in mqtt_data.items()
     }
-    mqtt_port = _optional_int(mqtt_table, "port", default=1883)
-    if mqtt_port is None:
-        mqtt_port = 1883
     return MqttConfig(
         host=_require_str(mqtt_table, "host"),
         topic=_require_str(mqtt_table, "topic"),
-        port=mqtt_port,
+        port=_optional_int(mqtt_table, "port", default=1883),
         username=_optional_str_or_none(mqtt_table, "username"),
         password=_optional_str_or_none(mqtt_table, "password"),
         client_id=_optional_str(mqtt_table, "client_id", "aw2sqlite"),

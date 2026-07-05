@@ -50,6 +50,13 @@ class TestExportObservations(TestCase):
         self.assertEqual(rows[1][ts_index], "2026-01-01 10:00:00")
         self.assertEqual(rows[3][ts_index], "2026-01-03 10:00:00")
 
+    def test_csv_export_uses_lf_line_terminator(self):
+        output = io.StringIO()
+
+        export_observations(self.db_path, output, fmt="csv")
+
+        self.assertNotIn("\r", output.getvalue())
+
     def test_json_export_is_valid_and_ordered(self):
         output = io.StringIO()
 
