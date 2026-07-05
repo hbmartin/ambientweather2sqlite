@@ -43,10 +43,11 @@ def _validate_timezone(tz: str | None) -> str | ZoneInfo:
 
     try:
         if ":" in tz:
-            hours, minutes = map(int, tz.split(":"))
-            offset_hours = (
-                hours + (minutes / 60) if hours >= 0 else hours - (minutes / 60)
-            )
+            hours_str, minutes_str = tz.split(":")
+            hours, minutes = int(hours_str), int(minutes_str)
+            # int("-0") == 0, so the sign must come from the string
+            sign = -1 if hours_str.strip().startswith("-") else 1
+            offset_hours = sign * (abs(hours) + minutes / 60)
         else:
             val = float(tz)
             # Heuristic for (+-)HHMM format

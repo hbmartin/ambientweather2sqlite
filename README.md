@@ -59,7 +59,13 @@ docker compose up -d
 ```
 
 The container runs as UID/GID `1001`; if you bind-mount `./data`, make sure that
-directory is writable by that user.
+directory is writable by that user. If your data was created by an older image
+that ran as root (this applies to named volumes too — Docker only copies
+ownership into a volume when it is first created empty), fix it once with:
+
+```bash
+docker compose run --rm --user root --entrypoint chown aw2sqlite -R 1001:1001 /data
+```
 
 The container starts the server bound to `0.0.0.0` so the published port is
 reachable; set `auth_token` in the config if others can reach that port.

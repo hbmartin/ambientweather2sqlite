@@ -35,7 +35,9 @@ def _observation_cursor(
 
 
 def _export_csv(cursor: sqlite3.Cursor, output: TextIO) -> int:
-    writer = csv.writer(output)
+    # "\n" instead of csv's default "\r\n" so text streams with newline
+    # translation (stdout, files opened without newline="") never emit \r\r\n.
+    writer = csv.writer(output, lineterminator="\n")
     writer.writerow([column[0] for column in cursor.description])
     row_count = 0
     for row in cursor:

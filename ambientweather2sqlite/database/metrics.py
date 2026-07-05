@@ -13,6 +13,7 @@ from .connection import (
     _TS_COL,
     _connect_database,
     _format_sqlite_timestamp,
+    _is_timezone_aware,
     _parse_stored_timestamp,
 )
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 def _normalize_current_time(now: datetime | None) -> datetime:
     if now is None:
         return datetime.now(UTC)
-    if now.tzinfo is None or now.utcoffset() is None:
+    if not _is_timezone_aware(now):
         return now.replace(tzinfo=UTC)
     return now.astimezone(UTC)
 

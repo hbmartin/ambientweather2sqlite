@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
-from ambientweather2sqlite.__main__ import _export_stdout, main, parse_args
+from ambientweather2sqlite.__main__ import main, parse_args
 from ambientweather2sqlite.models import AppConfig
 
 
@@ -73,26 +73,6 @@ class TestParseArgs(TestCase):
         self.assertIn("config", help_output)
         self.assertIn("once", help_output)
         self.assertIn("install-launchd", help_output)
-
-
-class TestExportStdout(TestCase):
-    def test_csv_export_stdout_disables_newline_translation(self):
-        stdout = Mock()
-
-        with patch("ambientweather2sqlite.__main__.sys.stdout", stdout):
-            result = _export_stdout("csv")
-
-        self.assertIs(result, stdout)
-        stdout.reconfigure.assert_called_once_with(newline="")
-
-    def test_json_export_stdout_leaves_newline_translation_unchanged(self):
-        stdout = Mock()
-
-        with patch("ambientweather2sqlite.__main__.sys.stdout", stdout):
-            result = _export_stdout("json")
-
-        self.assertIs(result, stdout)
-        stdout.reconfigure.assert_not_called()
 
 
 class TestMainServe(TestCase):
