@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -185,7 +186,10 @@ def start_daemon(  # noqa: PLR0913
                 )
                 continue
             remove_newlines = _print_observation(labels, live_data)
-            insert_observation(database_path, live_data)
+            try:
+                insert_observation(database_path, live_data)
+            except sqlite3.Error as e:
+                logger.warning("Failed to insert observation: %s", e)
             _publish_observation(logger, mqtt_config, live_data)
             wait_for_next_update(
                 next_deadline(epoch, period_seconds, time.monotonic()),

@@ -1,5 +1,6 @@
 import json
 import signal
+import sqlite3
 import threading
 from http.client import HTTPException
 from unittest import TestCase
@@ -205,6 +206,54 @@ class TestStartDaemon(TestCase):
             call("Error fetching live data: live data down"),
             mock_print.call_args_list,
         )
+
+    def test_start_daemon_survives_insert_errors_and_still_publishes(self):
+        database_path = "/tmp/weather.db"
+        logger = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"tempf": 72.5},
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ) as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon._publish_observation",
+            ) as mock_publish,
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    database_path,
+                    period_seconds=5,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        mock_insert.assert_called_once_with(database_path, {"tempf": 72.5})
+        logger.warning.assert_called_once()
+        self.assertIn(
+            "Failed to insert observation",
+            logger.warning.call_args.args[0],
+        )
+        mock_publish.assert_called_once()
 
     def test_start_daemon_retries_after_timeout_without_waiting(self):
         database_path = "/tmp/weather.db"
