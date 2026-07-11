@@ -106,6 +106,11 @@ def fetch_once(live_data_url: str) -> None:
     except HTTPException as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    if not live_data:
+        print(
+            "Warning: parsed 0 sensors - the station page format may have changed",
+            file=sys.stderr,
+        )
     print(json.dumps(live_data, indent=4))
 
 
@@ -130,6 +135,58 @@ def _publish_observation(
         publish(mqtt_config, json.dumps(live_data))
     except (MqttError, OSError) as e:
         logger.warning("MQTT publish failed: %s", e)
+
+
+def _collect_forever(  # noqa: PLR0913
+    live_data_url: str,
+    database_path: str,
+    labels: dict[str, str],
+    logger: logging.Logger,
+    mqtt_config: MqttConfig | None,
+    period_seconds: int,
+) -> None:
+    """Fetch, print, store, and publish observations until interrupted."""
+    remove_newlines = 0
+    epoch = time.monotonic()
+    while True:
+        clear_lines(remove_newlines)
+        try:
+            body = mureq.get(live_data_url)
+            live_data = extract_values(body)
+        except TimeoutError:
+            logger.info("TimeoutError")
+            print("Warming up weather station's server...")
+            remove_newlines = 1
+            continue
+        except HTTPException as e:
+            logger.info("%s\n%s", type(e).__name__, e)
+            print(f"Error fetching live data: {e}")
+            remove_newlines = 1
+            wait_for_next_update(
+                next_deadline(epoch, period_seconds, time.monotonic()),
+            )
+            continue
+        if not live_data:
+            logger.warning(
+                "Parsed 0 sensors from %s - "
+                "the station page format may have changed",
+                live_data_url,
+            )
+            print("Warning: parsed 0 sensors from station page")
+            remove_newlines = 1
+            wait_for_next_update(
+                next_deadline(epoch, period_seconds, time.monotonic()),
+            )
+            continue
+        remove_newlines = _print_observation(labels, live_data)
+        try:
+            insert_observation(database_path, live_data)
+        except sqlite3.Error as e:
+            logger.warning("Failed to insert observation: %s", e)
+        _publish_observation(logger, mqtt_config, live_data)
+        wait_for_next_update(
+            next_deadline(epoch, period_seconds, time.monotonic()),
+        )
 
 
 def start_daemon(  # noqa: PLR0913
@@ -164,36 +221,15 @@ def start_daemon(  # noqa: PLR0913
         server.start()
 
     _install_sigterm_handler()
-    remove_newlines = 0
-    epoch = time.monotonic()
     try:
-        while True:
-            clear_lines(remove_newlines)
-            try:
-                body = mureq.get(live_data_url)
-                live_data = extract_values(body)
-            except TimeoutError:
-                logger.info("TimeoutError")
-                print("Warming up weather station's server...")
-                remove_newlines = 1
-                continue
-            except HTTPException as e:
-                logger.info("%s\n%s", type(e).__name__, e)
-                print(f"Error fetching live data: {e}")
-                remove_newlines = 1
-                wait_for_next_update(
-                    next_deadline(epoch, period_seconds, time.monotonic()),
-                )
-                continue
-            remove_newlines = _print_observation(labels, live_data)
-            try:
-                insert_observation(database_path, live_data)
-            except sqlite3.Error as e:
-                logger.warning("Failed to insert observation: %s", e)
-            _publish_observation(logger, mqtt_config, live_data)
-            wait_for_next_update(
-                next_deadline(epoch, period_seconds, time.monotonic()),
-            )
+        _collect_forever(
+            live_data_url,
+            database_path,
+            labels,
+            logger,
+            mqtt_config,
+            period_seconds,
+        )
     except KeyboardInterrupt:
         print(f"\nStopping... results saved to {database_path}")
         if server is not None:

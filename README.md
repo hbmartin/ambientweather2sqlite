@@ -235,6 +235,7 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Current readings are displayed in the terminal as labeled JSON
 - Errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running
 - Implausible sensor values (e.g. temperature outside -150..200 range) emit a warning log
+- If a fetch parses zero sensors (e.g. the station page format changed), a warning is logged and nothing is inserted for that interval
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
 - When an `[mqtt]` config table is present, each observation is also published to the broker as JSON (failures are logged and never interrupt collection)

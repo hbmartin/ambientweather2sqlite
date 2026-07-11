@@ -1,6 +1,7 @@
 import json
 import signal
 import sqlite3
+import sys
 import threading
 from http.client import HTTPException
 from unittest import TestCase
@@ -9,6 +10,7 @@ from unittest.mock import Mock, call, patch
 from ambientweather2sqlite.daemon import (
     _install_sigterm_handler,
     clear_lines,
+    fetch_once,
     next_deadline,
     start_daemon,
     wait_for_next_update,
@@ -87,6 +89,24 @@ class TestDaemonHelpers(TestCase):
         thread.start()
         thread.join()
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
+
+
+class TestFetchOnce(TestCase):
+    def test_fetch_once_warns_on_zero_sensors(self):
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch("ambientweather2sqlite.daemon.extract_values", return_value={}),
+        ):
+            fetch_once("http://127.0.0.1/livedata.htm")
+
+        warning_calls = [
+            c
+            for c in mock_print.call_args_list
+            if c.args and "parsed 0 sensors" in str(c.args[0])
+        ]
+        self.assertEqual(len(warning_calls), 1)
+        self.assertIs(warning_calls[0].kwargs.get("file"), sys.stderr)
 
 
 class TestStartDaemon(TestCase):
@@ -254,6 +274,53 @@ class TestStartDaemon(TestCase):
             logger.warning.call_args.args[0],
         )
         mock_publish.assert_called_once()
+
+    def test_start_daemon_skips_insert_when_fetch_parses_zero_sensors(self):
+        database_path = "/tmp/weather.db"
+        logger = Mock()
+
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={},
+            ),
+            patch("ambientweather2sqlite.daemon.insert_observation") as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon._publish_observation",
+            ) as mock_publish,
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ) as mock_wait,
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    database_path,
+                    period_seconds=5,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        mock_insert.assert_not_called()
+        mock_publish.assert_not_called()
+        mock_wait.assert_called_once()
+        logger.warning.assert_called_once()
+        self.assertIn("Parsed 0 sensors", logger.warning.call_args.args[0])
+        self.assertIn(
+            call("Warning: parsed 0 sensors from station page"),
+            mock_print.call_args_list,
+        )
 
     def test_start_daemon_retries_after_timeout_without_waiting(self):
         database_path = "/tmp/weather.db"
