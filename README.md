@@ -72,6 +72,12 @@ docker compose run --rm --user root --entrypoint chown aw2sqlite -R 1001:1001 /d
 The container starts the server bound to `0.0.0.0` so the published port is
 reachable; set `auth_token` in the config if others can reach that port.
 
+The included `docker-compose.yml` caps Docker's captured stdout/stderr with a
+`json-file` logging driver (`max-size: 10m`, `max-file: 3`); without a limit the
+default driver keeps container logs forever. The daemon also detects that its
+stdout is not a terminal and prints one concise line per cycle instead of the
+interactive countdown, so the captured stream stays small.
+
 ## CLI
 
 The tool uses a subcommand-based CLI. An `aw2sqlite` alias is also available.
@@ -201,6 +207,14 @@ aw2sqlite install-launchd [--config CONFIG_PATH]
 
 Generates a macOS launchd plist file at `~/Library/LaunchAgents/com.ambientweather2sqlite.plist` and prints `launchctl` instructions to load/unload the service.
 
+launchd captures the daemon's stdout/stderr to `~/Library/Logs/ambientweather2sqlite.stdout.log` and `.stderr.log`. Because stdout is not a terminal there, the daemon emits only one concise line per cycle, so these files grow slowly - but launchd itself never rotates them. For a long-running install, add a `newsyslog` rule to cap them, e.g. in `/etc/newsyslog.d/ambientweather2sqlite.conf`:
+
+```text
+# logfilename                                        [owner:group]  mode count size when flags
+/Users/YOU/Library/Logs/ambientweather2sqlite.stdout.log            644  4     5120 *    J
+/Users/YOU/Library/Logs/ambientweather2sqlite.stderr.log            644  4     5120 *    J
+```
+
 ### `aw2sqlite install-systemd`
 
 ```bash
@@ -275,8 +289,8 @@ uses a non-default prefix.
 
 The daemon continuously fetches live data from your weather station's HTTP endpoint, parses sensor readings from the HTML page, and inserts them into the SQLite database every 60 seconds.
 
-- Current readings are displayed in the terminal as labeled JSON
-- Errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running
+- On an interactive terminal, current readings are displayed as labeled JSON with a live countdown to the next fetch. When stdout is captured (Docker, systemd, launchd, or a redirect), the daemon prints one concise line per cycle instead - the countdown and full-JSON redraw rely on terminal cursor control that would otherwise accumulate as unbounded noise in a log file
+- Errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running. That log (and the API server's `<database_stem>_server.log`) uses a size-capped rotating handler (5 MB × 4 files) so it cannot grow without bound
 - Implausible sensor values (e.g. temperature outside -150..200 range) emit a warning log
 - If a fetch parses zero sensors (e.g. the station page format changed), a warning is logged and nothing is inserted for that interval
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`

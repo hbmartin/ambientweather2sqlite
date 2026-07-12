@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, ClassVar, cast, override
 from urllib.parse import parse_qs, unquote, urlparse
@@ -36,6 +37,11 @@ from .prometheus import build_prometheus_metrics
 
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
+# Cap the rotating request log so it cannot grow without bound: the server
+# logs a line per HTTP request, so up to 4 files of ~5 MB each (~20 MB total).
+_LOG_MAX_BYTES = 5 * 1024 * 1024
+_LOG_BACKUP_COUNT = 3
+
 
 def _tz_from_query(query: QueryParams) -> str:
     if tz_query := query.get("tz", []):
@@ -65,7 +71,12 @@ def create_request_handler(  # noqa: C901
                 return
             # Prevent propagation to root logger to avoid console output
             cls._logger.propagate = False
-            handler = logging.FileHandler(cls.LOG_PATH)
+            handler = RotatingFileHandler(
+                cls.LOG_PATH,
+                maxBytes=_LOG_MAX_BYTES,
+                backupCount=_LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
             handler.setFormatter(
                 logging.Formatter(
                     "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
