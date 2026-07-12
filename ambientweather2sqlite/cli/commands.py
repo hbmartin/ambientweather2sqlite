@@ -1,5 +1,6 @@
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from ambientweather2sqlite.configuration import (
 )
 from ambientweather2sqlite.daemon import fetch_once, start_daemon
 from ambientweather2sqlite.database import (
+    backup_database,
     create_database_if_not_exists,
     export_observations,
     query_db_metrics,
@@ -95,6 +97,20 @@ def _cmd_export(args: argparse.Namespace) -> None:
     print(f"Exported {row_count} observations to {args.output}")
 
 
+def _cmd_backup(args: argparse.Namespace) -> None:
+    config_path = _resolve_config(args)
+    config = load_config(config_path)
+    if not Path(config.database_path).exists():
+        print(f"Database not found at {config.database_path}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        backup_size = backup_database(config.database_path, str(args.destination))
+    except (FileExistsError, sqlite3.Error) as e:
+        print(f"Backup failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Backed up {backup_size} bytes to {args.destination}")
+
+
 def _cmd_install_launchd(args: argparse.Namespace) -> None:
     from ambientweather2sqlite.launchd import install_launchd
 
@@ -122,6 +138,8 @@ def main(argv: list[str] | None = None) -> None:
             _cmd_status(args)
         case "export":
             _cmd_export(args)
+        case "backup":
+            _cmd_backup(args)
         case "install-launchd":
             _cmd_install_launchd(args)
         case "install-systemd":

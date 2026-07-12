@@ -253,6 +253,98 @@ class TestMainStatus(TestCase):
         )
 
 
+class TestMainBackup(TestCase):
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.backup_database")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_backup_calls_backup_database(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_backup_database: Mock,
+        mock_print: Mock,
+    ):
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_backup_database.return_value = 4096
+
+        with patch(
+            "ambientweather2sqlite.cli.commands.Path.exists",
+            return_value=True,
+        ):
+            main(["backup", "copy.db"])
+
+        mock_backup_database.assert_called_once_with("weather.db", "copy.db")
+        mock_print.assert_called_once_with(f"Backed up 4096 bytes to {Path('copy.db')}")
+
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_backup_exits_when_database_missing(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+    ):
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="missing.db",
+        )
+
+        with (
+            patch(
+                "ambientweather2sqlite.cli.commands.Path.exists",
+                return_value=False,
+            ),
+            self.assertRaises(SystemExit) as exc,
+        ):
+            main(["backup", "copy.db"])
+
+        self.assertEqual(exc.exception.code, 1)
+
+    @patch("ambientweather2sqlite.cli.commands.backup_database")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_backup_exits_when_destination_exists(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_backup_database: Mock,
+    ):
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_backup_database.side_effect = FileExistsError("already exists")
+
+        with (
+            patch(
+                "ambientweather2sqlite.cli.commands.Path.exists",
+                return_value=True,
+            ),
+            self.assertRaises(SystemExit) as exc,
+        ):
+            main(["backup", "copy.db"])
+
+        self.assertEqual(exc.exception.code, 1)
+
+
 class TestMainInstallLaunchd(TestCase):
     @patch("ambientweather2sqlite.launchd.install_launchd")
     @patch("ambientweather2sqlite.cli.commands.create_config_file")

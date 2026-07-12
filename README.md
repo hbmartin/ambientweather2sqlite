@@ -87,6 +87,7 @@ aw2sqlite <command> [options]
 | `once` | Fetch a single observation and print it as JSON (no DB write) |
 | `status` | Show database metrics (row count, file size, timestamp range) and observation gaps |
 | `export` | Export observations as CSV or JSON |
+| `backup` | Write a compacted backup copy of the database (safe while the daemon is running) |
 | `install-launchd` | Generate a macOS launchd plist for running as a service |
 | `install-systemd` | Generate a systemd user unit for running as a service (Linux) |
 
@@ -173,6 +174,21 @@ and are compared against the stored `ts` column.
 
 ```bash
 aw2sqlite export --format csv --start 2026-01-01 --end 2026-02-01 --output january.csv
+```
+
+### `aw2sqlite backup`
+
+```bash
+aw2sqlite backup DESTINATION [--config CONFIG_PATH]
+```
+
+Writes a compacted, self-contained copy of the database to `DESTINATION`
+using SQLite's `VACUUM INTO`. This is safe while the daemon is running (a
+raw file copy of a WAL database is not) and the destination must not
+already exist.
+
+```bash
+aw2sqlite backup /backups/aw2sqlite-$(date +%F).db
 ```
 
 ### `aw2sqlite install-launchd`

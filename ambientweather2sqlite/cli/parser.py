@@ -8,6 +8,7 @@ _SUBCOMMANDS = {
     "once",
     "status",
     "export",
+    "backup",
     "install-launchd",
     "install-systemd",
 }
@@ -123,6 +124,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output",
         type=Path,
         help="Output file path (default: stdout).",
+    )
+
+    # backup
+    backup_parser = subparsers.add_parser(
+        "backup",
+        help="Write a compacted backup copy of the database (VACUUM INTO).",
+    )
+    _add_config_arg(backup_parser)
+    backup_parser.add_argument(
+        "destination",
+        type=Path,
+        help="Path for the backup file (must not already exist).",
     )
 
     # install-launchd
