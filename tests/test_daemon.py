@@ -15,6 +15,7 @@ from ambientweather2sqlite.daemon import (
     start_daemon,
     wait_for_next_update,
 )
+from ambientweather2sqlite.models import AlertConfig
 
 
 class TestDaemonHelpers(TestCase):
@@ -89,6 +90,92 @@ class TestDaemonHelpers(TestCase):
         thread.start()
         thread.join()
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
+
+
+class TestDaemonAlerts(TestCase):
+    def test_start_daemon_counts_failures_in_both_branches(self):
+        alert_config = AlertConfig(webhook_url="http://hooks.local/alert")
+        notifier = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=Mock(),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.AlertNotifier",
+                return_value=notifier,
+            ) as mock_notifier_cls,
+            patch(
+                "ambientweather2sqlite.daemon.mureq.get",
+                side_effect=[
+                    TimeoutError,
+                    HTTPException("live data down"),
+                    KeyboardInterrupt,
+                ],
+            ),
+            patch("ambientweather2sqlite.daemon.wait_for_next_update"),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    alert_config=alert_config,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        mock_notifier_cls.assert_called_once()
+        self.assertIs(mock_notifier_cls.call_args.args[0], alert_config)
+        self.assertEqual(notifier.record_failure.call_count, 2)
+        notifier.record_success.assert_not_called()
+
+    def test_start_daemon_records_success_after_fetch(self):
+        notifier = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=Mock(),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.AlertNotifier",
+                return_value=notifier,
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"tempf": 72.5},
+            ),
+            patch("ambientweather2sqlite.daemon.insert_observation"),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    alert_config=AlertConfig(webhook_url="http://hooks.local/alert"),
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        notifier.record_success.assert_called_once_with()
+        notifier.record_failure.assert_not_called()
 
 
 class TestFetchOnce(TestCase):

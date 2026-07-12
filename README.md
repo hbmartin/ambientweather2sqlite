@@ -25,6 +25,7 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 * **Data Export:** Dump observations as CSV or JSON, with optional time bounds
 * **Prometheus Metrics:** `/metrics` serves the Prometheus text format for Grafana dashboards
 * **MQTT Publishing:** Optional per-observation publish to an MQTT broker (e.g. Home Assistant)
+* **Webhook Alerts:** Optional webhook notification when the station goes offline or recovers
 * **API Authentication:** Optional bearer token and configurable bind address for the HTTP server
 * **macOS & Linux Services:** Generate launchd plists or systemd user units for running as a background daemon
 * **Docker Support:** Dockerfile and compose example included
@@ -228,6 +229,12 @@ host = "localhost"  # optional bind address; use "0.0.0.0" to expose on the netw
 auth_token = "s3cret" # optional; require "Authorization: Bearer s3cret" on API requests
 log_format = "text" # optional, "text" (default) or "json" for JSONL logs
 
+# Optional: POST a webhook when the station goes offline / comes back
+[alerts]
+webhook_url = "https://hooks.example.com/alert"
+failure_threshold = 3  # optional; consecutive failed fetches before alerting
+timeout_seconds = 5.0  # optional; webhook request timeout
+
 # Optional: publish each observation as JSON to an MQTT broker
 [mqtt]
 host = "192.168.0.10"
@@ -259,6 +266,7 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
 - When an `[mqtt]` config table is present, each observation is also published to the broker as JSON (failures are logged and never interrupt collection)
+- When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires on the first success afterwards - one alert per outage, and webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
 - A metadata file (`<database_stem>_metadata.json`) is generated in [Datasette metadata format](https://docs.datasette.io/en/stable/metadata.html) with human-readable sensor labels, units, and licensing (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
 - Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown
 

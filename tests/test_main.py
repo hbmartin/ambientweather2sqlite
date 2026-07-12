@@ -130,6 +130,7 @@ class TestMainServe(TestCase):
             host="localhost",
             auth_token=None,
             mqtt_config=None,
+            alert_config=None,
         )
 
     @patch("ambientweather2sqlite.cli.commands.start_daemon")
@@ -165,6 +166,7 @@ class TestMainServe(TestCase):
             host="localhost",
             auth_token=None,
             mqtt_config=None,
+            alert_config=None,
         )
 
 

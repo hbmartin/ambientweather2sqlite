@@ -15,9 +15,10 @@ from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
 from ambientweather2sqlite.server import Server
 
+from .alerts import AlertNotifier
 from .database import insert_observation
 from .metadata import create_metadata
-from .models import MqttConfig
+from .models import AlertConfig, MqttConfig
 from .mqtt import MqttError, publish
 
 
@@ -144,6 +145,7 @@ def _collect_forever(  # noqa: PLR0913
     logger: logging.Logger,
     mqtt_config: MqttConfig | None,
     period_seconds: int,
+    notifier: AlertNotifier | None = None,
 ) -> None:
     """Fetch, print, store, and publish observations until interrupted."""
     remove_newlines = 0
@@ -156,16 +158,22 @@ def _collect_forever(  # noqa: PLR0913
         except TimeoutError:
             logger.info("TimeoutError")
             print("Warming up weather station's server...")
+            if notifier is not None:
+                notifier.record_failure()
             remove_newlines = 1
             continue
         except HTTPException as e:
             logger.info("%s\n%s", type(e).__name__, e)
             print(f"Error fetching live data: {e}")
+            if notifier is not None:
+                notifier.record_failure()
             remove_newlines = 1
             wait_for_next_update(
                 next_deadline(epoch, period_seconds, time.monotonic()),
             )
             continue
+        if notifier is not None:
+            notifier.record_success()
         if not live_data:
             logger.warning(
                 "Parsed 0 sensors from %s - "
@@ -199,6 +207,7 @@ def start_daemon(  # noqa: PLR0913
     host: str = "localhost",
     auth_token: str | None = None,
     mqtt_config: MqttConfig | None = None,
+    alert_config: AlertConfig | None = None,
 ) -> None:
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")
@@ -220,6 +229,12 @@ def start_daemon(  # noqa: PLR0913
         server = Server(live_data_url, database_path, port, host, auth_token)
         server.start()
 
+    notifier = (
+        AlertNotifier(alert_config, live_data_url, logger)
+        if alert_config is not None
+        else None
+    )
+
     _install_sigterm_handler()
     try:
         _collect_forever(
@@ -229,6 +244,7 @@ def start_daemon(  # noqa: PLR0913
             logger,
             mqtt_config,
             period_seconds,
+            notifier,
         )
     except KeyboardInterrupt:
         print(f"\nStopping... results saved to {database_path}")

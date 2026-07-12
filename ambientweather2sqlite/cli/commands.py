@@ -50,6 +50,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         host=args.host or config.host,
         auth_token=config.auth_token,
         mqtt_config=config.mqtt,
+        alert_config=config.alerts,
     )
 
 

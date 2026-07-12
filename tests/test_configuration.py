@@ -96,6 +96,110 @@ class TestConfiguration(TestCase):
         self.assertTrue(config.mqtt.tls)
         self.assertEqual(config.mqtt.client_id, "aw2sqlite")
 
+    def test_load_config_parses_alerts_table(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[alerts]\n"
+                'webhook_url = "https://hooks.local/alert"\n'
+                "failure_threshold = 5\n"
+                "timeout_seconds = 2.5\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        assert config.alerts is not None
+        self.assertEqual(config.alerts.webhook_url, "https://hooks.local/alert")
+        self.assertEqual(config.alerts.failure_threshold, 5)
+        self.assertEqual(config.alerts.timeout_seconds, 2.5)
+
+    def test_load_config_alerts_defaults(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[alerts]\n"
+                'webhook_url = "https://hooks.local/alert"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        assert config.alerts is not None
+        self.assertEqual(config.alerts.failure_threshold, 3)
+        self.assertEqual(config.alerts.timeout_seconds, 5.0)
+
+    def test_load_config_defaults_alerts_to_none(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertIsNone(config.alerts)
+
+    def test_load_config_rejects_alerts_without_webhook_url(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[alerts]\n"
+                "failure_threshold = 5\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TypeError, "webhook_url must be a string"):
+                load_config(config_path)
+
+    def test_load_config_rejects_non_http_webhook_url(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[alerts]\n"
+                'webhook_url = "hooks.local/alert"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "alerts.webhook_url must start with http:// or https://",
+            ):
+                load_config(config_path)
+
+    def test_load_config_rejects_zero_failure_threshold(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[alerts]\n"
+                'webhook_url = "https://hooks.local/alert"\n'
+                "failure_threshold = 0\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "alerts.failure_threshold must be at least 1",
+            ):
+                load_config(config_path)
+
     def test_load_config_rejects_mqtt_port_zero(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"

@@ -27,6 +27,13 @@ class MqttConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AlertConfig:
+    webhook_url: str
+    failure_threshold: int = 3
+    timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     live_data_url: str
     database_path: str
@@ -35,6 +42,7 @@ class AppConfig:
     host: str = "localhost"
     auth_token: str | None = None
     mqtt: MqttConfig | None = None
+    alerts: AlertConfig | None = None
 
 
 class LiveDataMetadata(TypedDict):
