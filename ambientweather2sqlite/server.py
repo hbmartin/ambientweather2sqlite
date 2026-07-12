@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError, MissingTimezoneError
@@ -316,25 +316,24 @@ def create_request_handler(  # noqa: C901
             self.send_header("Access-Control-Allow-Headers", "Authorization")
             self.end_headers()
 
+        _ROUTES: ClassVar[dict[str, Callable[..., None]]] = {
+            "/": _send_live_data,
+            "/daily": _send_daily_aggregated_data,
+            "/hourly": _send_hourly_aggregated_data,
+            "/range": _send_range_aggregated_data,
+            "/health": _send_health,
+            "/metrics": _send_metrics,
+        }
+
         def do_GET(self) -> None:
             if not self._is_authorized():
                 self._send_json(build_error_payload("Unauthorized"), 401)
                 return
-            match self.path.split("?")[0]:
-                case "/":
-                    self._send_live_data()
-                case "/daily":
-                    self._send_daily_aggregated_data()
-                case "/hourly":
-                    self._send_hourly_aggregated_data()
-                case "/range":
-                    self._send_range_aggregated_data()
-                case "/health":
-                    self._send_health()
-                case "/metrics":
-                    self._send_metrics()
-                case _:
-                    self._send_json(build_error_payload("Not found"), 404)
+            handler = self._ROUTES.get(self.path.split("?")[0])
+            if handler is None:
+                self._send_json(build_error_payload("Not found"), 404)
+                return
+            handler(self)
 
     JSONHandler.setup_logger()
     return JSONHandler
