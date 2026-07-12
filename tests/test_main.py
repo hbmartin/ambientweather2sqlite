@@ -5,8 +5,16 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
-from ambientweather2sqlite.__main__ import main, parse_args
+from ambientweather2sqlite.cli.commands import main
+from ambientweather2sqlite.cli.parser import parse_args
 from ambientweather2sqlite.models import AppConfig
+
+
+class TestMainShim(TestCase):
+    def test_dunder_main_reexports_cli_main(self):
+        import ambientweather2sqlite.__main__ as dunder_main
+
+        self.assertIs(dunder_main.main, main)
 
 
 class TestParseArgs(TestCase):
@@ -76,11 +84,11 @@ class TestParseArgs(TestCase):
 
 
 class TestMainServe(TestCase):
-    @patch("ambientweather2sqlite.__main__.start_daemon")
-    @patch("ambientweather2sqlite.__main__.create_database_if_not_exists")
-    @patch("ambientweather2sqlite.__main__.load_config")
-    @patch("ambientweather2sqlite.__main__.create_config_file")
-    @patch("ambientweather2sqlite.__main__.get_config_path")
+    @patch("ambientweather2sqlite.cli.commands.start_daemon")
+    @patch("ambientweather2sqlite.cli.commands.create_database_if_not_exists")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
     def test_main_serve_uses_cli_flags(
         self,
         mock_get_config_path: Mock,
@@ -124,11 +132,11 @@ class TestMainServe(TestCase):
             mqtt_config=None,
         )
 
-    @patch("ambientweather2sqlite.__main__.start_daemon")
-    @patch("ambientweather2sqlite.__main__.create_database_if_not_exists")
-    @patch("ambientweather2sqlite.__main__.load_config")
-    @patch("ambientweather2sqlite.__main__.create_config_file")
-    @patch("ambientweather2sqlite.__main__.get_config_path")
+    @patch("ambientweather2sqlite.cli.commands.start_daemon")
+    @patch("ambientweather2sqlite.cli.commands.create_database_if_not_exists")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
     def test_main_backward_compat_flags(
         self,
         mock_get_config_path: Mock,
@@ -161,10 +169,10 @@ class TestMainServe(TestCase):
 
 
 class TestMainOnce(TestCase):
-    @patch("ambientweather2sqlite.__main__.fetch_once")
-    @patch("ambientweather2sqlite.__main__.load_config")
-    @patch("ambientweather2sqlite.__main__.create_config_file")
-    @patch("ambientweather2sqlite.__main__.get_config_path")
+    @patch("ambientweather2sqlite.cli.commands.fetch_once")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
     def test_main_once_calls_fetch_once(
         self,
         mock_get_config_path: Mock,
@@ -185,7 +193,7 @@ class TestMainOnce(TestCase):
 
 
 class TestMainConfig(TestCase):
-    @patch("ambientweather2sqlite.__main__.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
     def test_main_config_overwrites_existing_file(self, mock_create_config_file: Mock):
         config_path = Path("config.toml")
         mock_create_config_file.return_value = config_path
@@ -200,11 +208,11 @@ class TestMainConfig(TestCase):
 
 class TestMainStatus(TestCase):
     @patch("builtins.print")
-    @patch("ambientweather2sqlite.__main__.query_observation_gaps")
-    @patch("ambientweather2sqlite.__main__.query_db_metrics")
-    @patch("ambientweather2sqlite.__main__.load_config")
-    @patch("ambientweather2sqlite.__main__.create_config_file")
-    @patch("ambientweather2sqlite.__main__.get_config_path")
+    @patch("ambientweather2sqlite.cli.commands.query_observation_gaps")
+    @patch("ambientweather2sqlite.cli.commands.query_db_metrics")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
     def test_main_status_prints_metrics(
         self,
         mock_get_config_path: Mock,
@@ -231,7 +239,7 @@ class TestMainStatus(TestCase):
         mock_query_db_metrics.return_value = metrics
         mock_query_observation_gaps.return_value = []
 
-        with patch("ambientweather2sqlite.__main__.Path.exists", return_value=True):
+        with patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True):
             main(["status"])
 
         mock_query_db_metrics.assert_called_once_with("weather.db")
@@ -247,8 +255,8 @@ class TestMainStatus(TestCase):
 
 class TestMainInstallLaunchd(TestCase):
     @patch("ambientweather2sqlite.launchd.install_launchd")
-    @patch("ambientweather2sqlite.__main__.create_config_file")
-    @patch("ambientweather2sqlite.__main__.get_config_path")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
     def test_main_install_launchd_calls_handler(
         self,
         mock_get_config_path: Mock,
