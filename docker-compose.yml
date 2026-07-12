@@ -17,3 +17,10 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+    # Cap Docker's captured stdout/stderr so the container log cannot grow
+    # without bound (the default json-file driver keeps logs forever).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

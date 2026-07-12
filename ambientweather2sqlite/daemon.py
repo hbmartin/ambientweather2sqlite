@@ -8,6 +8,7 @@ import threading
 import time
 from datetime import datetime
 from http.client import HTTPException
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import FrameType
 
@@ -21,6 +22,11 @@ from .ha_discovery import build_discovery_messages
 from .metadata import create_metadata
 from .models import AlertConfig, ColumnUnitMap, LabelMap, MqttConfig
 from .mqtt import MqttError, publish, publish_message
+
+# Cap the rotating daemon log so it cannot grow without bound on a
+# long-running deployment: up to 4 files of ~5 MB each (~20 MB total).
+_LOG_MAX_BYTES = 5 * 1024 * 1024
+_LOG_BACKUP_COUNT = 3
 
 
 class _JsonFormatter(logging.Formatter):
@@ -43,11 +49,20 @@ def _configure_logging(
     *,
     log_format: str = "text",
 ) -> logging.Logger:
-    """Set up file logging with the requested format."""
+    """Set up rotating file logging with the requested format.
+
+    A size-capped rotating handler keeps the daemon log bounded no matter how
+    long the collector runs.
+    """
     logger = logging.getLogger("ambientweather2sqlite")
     logger.setLevel(logging.INFO)
 
-    handler = logging.FileHandler(str(log_path))
+    handler = RotatingFileHandler(
+        str(log_path),
+        maxBytes=_LOG_MAX_BYTES,
+        backupCount=_LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
     if log_format == "json":
         handler.setFormatter(_JsonFormatter())
     else:
@@ -65,8 +80,18 @@ def clear_lines(n: int) -> None:
         print("\033[A\033[K", end="")
 
 
-def wait_for_next_update(deadline: float) -> None:
-    """Sleep until the monotonic deadline, displaying a live countdown."""
+def wait_for_next_update(deadline: float, *, show_countdown: bool = True) -> None:
+    """Sleep until the monotonic deadline.
+
+    On an interactive terminal a live countdown is redrawn on a single line
+    with a carriage return. When stdout is captured to a file or the journal,
+    those escapes accumulate as noise instead of overwriting the line, so
+    non-interactive callers disable the countdown and simply sleep.
+    """
+    if not show_countdown:
+        if (remaining := deadline - time.monotonic()) > 0:
+            time.sleep(remaining)
+        return
     while (remaining := deadline - time.monotonic()) > 0:
         print(f"\033[KNext update in {math.ceil(remaining)} seconds", end="\r")
         time.sleep(min(1.0, remaining))
@@ -126,6 +151,33 @@ def _print_observation(labels: dict[str, str], live_data: dict) -> int:
     return pretty_data.count("\n") + 2
 
 
+def _status(message: str, *, interactive: bool) -> int:
+    """Print a one-line status update, returning lines for the next redraw.
+
+    Interactive callers clear the single status line before the next frame;
+    captured streams never rewrite lines, so nothing needs clearing.
+    """
+    print(message)
+    return 1 if interactive else 0
+
+
+def _emit_observation(
+    labels: dict[str, str],
+    live_data: dict,
+    *,
+    interactive: bool,
+) -> int:
+    """Show an observation, returning the line count for the next redraw.
+
+    Interactive terminals get the full labeled JSON redrawn in place each
+    cycle. Captured streams get one concise line so the log stays bounded.
+    """
+    if interactive:
+        return _print_observation(labels, live_data)
+    print(f"Recorded {len(live_data)} sensors at {datetime.now()}")
+    return 0
+
+
 def _publish_observation(
     logger: logging.Logger,
     mqtt_config: MqttConfig | None,
@@ -166,12 +218,15 @@ def _record_failure_and_wait(
     notifier: AlertNotifier | None,
     epoch: float,
     period_seconds: int,
+    *,
+    interactive: bool = True,
 ) -> None:
     """Count a failed collection attempt and sleep until the next slot."""
     if notifier is not None:
         notifier.record_failure()
     wait_for_next_update(
         next_deadline(epoch, period_seconds, time.monotonic()),
+        show_countdown=interactive,
     )
 
 
@@ -183,27 +238,39 @@ def _collect_forever(  # noqa: PLR0913
     mqtt_config: MqttConfig | None,
     period_seconds: int,
     notifier: AlertNotifier | None = None,
+    *,
+    interactive: bool = True,
 ) -> None:
     """Fetch, print, store, and publish observations until interrupted."""
     remove_newlines = 0
     epoch = time.monotonic()
     while True:
-        clear_lines(remove_newlines)
+        if interactive:
+            clear_lines(remove_newlines)
         try:
             body = mureq.get(live_data_url)
             live_data = extract_values(body)
         except TimeoutError:
             logger.info("TimeoutError")
-            print("Warming up weather station's server...")
+            remove_newlines = _status(
+                "Warming up weather station's server...",
+                interactive=interactive,
+            )
             if notifier is not None:
                 notifier.record_failure()
-            remove_newlines = 1
             continue
         except HTTPException as e:
             logger.info("%s\n%s", type(e).__name__, e)
-            print(f"Error fetching live data: {e}")
-            remove_newlines = 1
-            _record_failure_and_wait(notifier, epoch, period_seconds)
+            remove_newlines = _status(
+                f"Error fetching live data: {e}",
+                interactive=interactive,
+            )
+            _record_failure_and_wait(
+                notifier,
+                epoch,
+                period_seconds,
+                interactive=interactive,
+            )
             continue
         if not live_data:
             # An unparseable page means no data is flowing, so it counts
@@ -213,13 +280,24 @@ def _collect_forever(  # noqa: PLR0913
                 "the station page format may have changed",
                 live_data_url,
             )
-            print("Warning: parsed 0 sensors from station page")
-            remove_newlines = 1
-            _record_failure_and_wait(notifier, epoch, period_seconds)
+            remove_newlines = _status(
+                "Warning: parsed 0 sensors from station page",
+                interactive=interactive,
+            )
+            _record_failure_and_wait(
+                notifier,
+                epoch,
+                period_seconds,
+                interactive=interactive,
+            )
             continue
         if notifier is not None:
             notifier.record_success()
-        remove_newlines = _print_observation(labels, live_data)
+        remove_newlines = _emit_observation(
+            labels,
+            live_data,
+            interactive=interactive,
+        )
         try:
             insert_observation(database_path, live_data)
         except sqlite3.Error as e:
@@ -227,6 +305,7 @@ def _collect_forever(  # noqa: PLR0913
         _publish_observation(logger, mqtt_config, live_data)
         wait_for_next_update(
             next_deadline(epoch, period_seconds, time.monotonic()),
+            show_countdown=interactive,
         )
 
 
@@ -241,7 +320,13 @@ def start_daemon(  # noqa: PLR0913
     auth_token: str | None = None,
     mqtt_config: MqttConfig | None = None,
     alert_config: AlertConfig | None = None,
+    interactive: bool | None = None,
 ) -> None:
+    # A non-tty stdout (Docker, systemd, launchd, a redirect) can't overwrite
+    # lines, so the live countdown/observation redraw would otherwise pile up
+    # forever. Fall back to concise, append-only output there.
+    if interactive is None:
+        interactive = sys.stdout.isatty()
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")
 
@@ -281,6 +366,7 @@ def start_daemon(  # noqa: PLR0913
             mqtt_config,
             period_seconds,
             notifier,
+            interactive=interactive,
         )
     except KeyboardInterrupt:
         print(f"\nStopping... results saved to {database_path}")

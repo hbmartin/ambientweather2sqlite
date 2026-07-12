@@ -2,12 +2,16 @@ import json
 import signal
 import sqlite3
 import sys
+import tempfile
 import threading
 from http.client import HTTPException
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
 from ambientweather2sqlite.daemon import (
+    _configure_logging,
     _install_sigterm_handler,
     clear_lines,
     fetch_once,
@@ -62,6 +66,38 @@ class TestDaemonHelpers(TestCase):
 
         mock_print.assert_not_called()
         mock_sleep.assert_not_called()
+
+    def test_wait_for_next_update_skips_countdown_when_disabled(self):
+        # When stdout is captured the countdown escapes only pile up as noise,
+        # so a single sleep replaces the per-second redraw.
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.time.sleep") as mock_sleep,
+            patch("ambientweather2sqlite.daemon.time.monotonic", return_value=0.0),
+        ):
+            wait_for_next_update(5.0, show_countdown=False)
+
+        mock_print.assert_not_called()
+        mock_sleep.assert_called_once_with(5.0)
+
+    def test_configure_logging_uses_a_bounded_rotating_handler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "weather_daemon.log"
+            logger = _configure_logging(log_path)
+            handlers = [
+                handler
+                for handler in logger.handlers
+                if isinstance(handler, RotatingFileHandler)
+                and handler.baseFilename == str(log_path)
+            ]
+            try:
+                self.assertEqual(len(handlers), 1)
+                self.assertGreater(handlers[0].maxBytes, 0)
+                self.assertGreater(handlers[0].backupCount, 0)
+            finally:
+                for handler in handlers:
+                    logger.removeHandler(handler)
+                    handler.close()
 
     def test_next_deadline_is_aligned_to_epoch(self):
         self.assertEqual(next_deadline(100.0, 60, 100.5), 160.0)
@@ -354,6 +390,7 @@ class TestStartDaemon(TestCase):
                 database_path,
                 port=8080,
                 period_seconds=5,
+                interactive=True,
             )
 
         self.assertEqual(exc.exception.code, 0)
@@ -384,6 +421,52 @@ class TestStartDaemon(TestCase):
             call(f"\nStopping... results saved to {database_path}"),
             mock_print.call_args_list,
         )
+
+    def test_start_daemon_non_interactive_suppresses_live_display(self):
+        database_path = "/tmp/weather.db"
+        logger = Mock()
+
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.clear_lines") as mock_clear_lines,
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({"tempf": "Outdoor Temperature"}, {}),
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"tempf": 72.5},
+            ),
+            patch("ambientweather2sqlite.daemon.insert_observation") as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ) as mock_wait,
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    database_path,
+                    period_seconds=5,
+                    interactive=False,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        mock_insert.assert_called_once_with(database_path, {"tempf": 72.5})
+        # No terminal cursor control is emitted when stdout is captured.
+        mock_clear_lines.assert_not_called()
+        # The live countdown is disabled so captured logs stay bounded.
+        mock_wait.assert_called_once()
+        self.assertFalse(mock_wait.call_args.kwargs["show_countdown"])
+        # A concise one-line summary replaces the multi-line JSON redraw.
+        printed = [c.args[0] for c in mock_print.call_args_list if c.args]
+        self.assertTrue(any("Recorded 1 sensors" in line for line in printed))
+        self.assertFalse(any(line.startswith("Updated at:") for line in printed))
 
     def test_start_daemon_logs_metadata_and_live_data_http_errors(self):
         database_path = "/tmp/weather.db"
@@ -556,6 +639,7 @@ class TestStartDaemon(TestCase):
                     "http://127.0.0.1/livedata.htm",
                     database_path,
                     period_seconds=5,
+                    interactive=True,
                 )
 
         self.assertEqual(exc.exception.code, 0)
@@ -598,6 +682,7 @@ class TestStartDaemon(TestCase):
                     "http://127.0.0.1/livedata.htm",
                     database_path,
                     period_seconds=5,
+                    interactive=True,
                 )
 
         self.assertEqual(exc.exception.code, 0)
