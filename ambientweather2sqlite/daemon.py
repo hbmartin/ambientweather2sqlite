@@ -56,6 +56,12 @@ def _configure_logging(
     """
     logger = logging.getLogger("ambientweather2sqlite")
     logger.setLevel(logging.INFO)
+    # The logger is a process-global singleton, so drop any handler from a
+    # previous call before adding a new one - otherwise repeated setup leaks
+    # open files and duplicates every log line.
+    for existing in list(logger.handlers):
+        logger.removeHandler(existing)
+        existing.close()
 
     handler = RotatingFileHandler(
         str(log_path),
@@ -174,7 +180,9 @@ def _emit_observation(
     """
     if interactive:
         return _print_observation(labels, live_data)
-    print(f"Recorded {len(live_data)} sensors at {datetime.now()}")
+    # A timezone-aware timestamp stays unambiguous in captured logs that may be
+    # correlated across hosts in different timezones.
+    print(f"Recorded {len(live_data)} sensors at {datetime.now().astimezone()}")
     return 0
 
 
