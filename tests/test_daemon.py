@@ -468,6 +468,45 @@ class TestStartDaemon(TestCase):
         self.assertTrue(any("Recorded 1 sensors" in line for line in printed))
         self.assertFalse(any(line.startswith("Updated at:") for line in printed))
 
+    def test_start_daemon_timeout_is_quiet_when_non_interactive(self):
+        database_path = "/tmp/weather.db"
+        logger = Mock()
+
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.clear_lines") as mock_clear_lines,
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.mureq.get",
+                side_effect=[TimeoutError, KeyboardInterrupt],
+            ),
+            patch("ambientweather2sqlite.daemon.wait_for_next_update") as mock_wait,
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    database_path,
+                    period_seconds=5,
+                    interactive=False,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        # The timeout is still recorded to the (rotating) daemon log...
+        self.assertIn(call("TimeoutError"), logger.info.call_args_list)
+        # ...but the redundant status line is not reprinted to captured stdout.
+        printed = [c.args[0] for c in mock_print.call_args_list if c.args]
+        self.assertFalse(any("Warming up" in line for line in printed))
+        # No terminal cursor control, and the fast warmup retry never waits.
+        mock_clear_lines.assert_not_called()
+        mock_wait.assert_not_called()
+
     def test_start_daemon_logs_metadata_and_live_data_http_errors(self):
         database_path = "/tmp/weather.db"
         logger = Mock()

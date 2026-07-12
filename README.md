@@ -209,7 +209,7 @@ Generates a macOS launchd plist file at `~/Library/LaunchAgents/com.ambientweath
 
 launchd captures the daemon's stdout/stderr to `~/Library/Logs/ambientweather2sqlite.stdout.log` and `.stderr.log`. Because stdout is not a terminal there, the daemon emits only one concise line per cycle, so these files grow slowly - but launchd itself never rotates them. For a long-running install, add a `newsyslog` rule to cap them, e.g. in `/etc/newsyslog.d/ambientweather2sqlite.conf`:
 
-```
+```text
 # logfilename                                        [owner:group]  mode count size when flags
 /Users/YOU/Library/Logs/ambientweather2sqlite.stdout.log            644  4     5120 *    J
 /Users/YOU/Library/Logs/ambientweather2sqlite.stderr.log            644  4     5120 *    J

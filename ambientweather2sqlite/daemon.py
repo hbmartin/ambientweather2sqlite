@@ -260,10 +260,14 @@ def _collect_forever(  # noqa: PLR0913
             live_data = extract_values(body)
         except TimeoutError:
             logger.info("TimeoutError")
-            remove_newlines = _status(
-                "Warming up weather station's server...",
-                interactive=interactive,
-            )
+            # Retry warmup quickly, but on a captured stream skip the repeated
+            # status line - it can't overwrite the previous one and would pile
+            # up on every fast retry. The rotating daemon log still records it.
+            if interactive:
+                remove_newlines = _status(
+                    "Warming up weather station's server...",
+                    interactive=True,
+                )
             if notifier is not None:
                 notifier.record_failure()
             continue
