@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, cast, override
@@ -19,6 +20,7 @@ from .database import (
     query_latest_timestamp,
     query_range_aggregated_data,
 )
+from .database.connection import _parse_stored_timestamp
 from .database.metrics import query_latest_observation
 from .models import (
     HealthPayload,
@@ -33,6 +35,8 @@ from .models import (
 from .prometheus import build_prometheus_metrics
 
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+# Matches the default gap threshold used by the status command.
+_STALE_THRESHOLD_SECONDS = 180.0
 
 
 def _tz_from_query(query: QueryParams) -> str:
@@ -231,17 +235,48 @@ def create_request_handler(  # noqa: C901
                 ),
             )
 
-        def _build_health_payload(self) -> HealthPayload:
+        def _build_health_payload(
+            self,
+            now: datetime | None = None,
+        ) -> tuple[HealthPayload, int]:
+            """Build the health payload and its HTTP status code.
+
+            An empty database stays "ok" so a freshly deployed daemon does
+            not fail its readiness probe before the first observation.
+            """
             latest_ts = query_latest_timestamp(self.DB_PATH)
             metrics = query_db_metrics(self.DB_PATH)
-            return {
-                "status": "ok",
+            age_seconds: float | None = None
+            stale = False
+            if latest_ts is not None:
+                current_time = now if now is not None else datetime.now(UTC)
+                try:
+                    age_seconds = (
+                        current_time - _parse_stored_timestamp(latest_ts)
+                    ).total_seconds()
+                except ValueError:
+                    stale = True
+                else:
+                    stale = age_seconds > _STALE_THRESHOLD_SECONDS
+            payload: HealthPayload = {
+                "status": "stale" if stale else "ok",
                 "last_observation_ts": latest_ts,
+                "age_seconds": age_seconds,
                 "row_count": metrics["row_count"],
             }
+            return payload, 503 if stale else 200
 
         def _send_health(self) -> None:
-            self._send_query_response(self._build_health_payload)
+            try:
+                payload, status = self._build_health_payload()
+            except Aw2SqliteError as e:
+                self.log_message("%s\n%s", type(e).__name__, str(e))
+                self._send_json(build_error_payload(str(e)), 400)
+            except Exception as e:  # noqa: BLE001
+                self.log_message("%s\n%s", type(e).__name__, str(e))
+                self._send_json(build_error_payload(str(e)), 500)
+            else:
+                self._send_json(payload, status)
 
         def _wants_prometheus(self, query: QueryParams) -> bool:
             if fmt := query.get("format", []):

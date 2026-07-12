@@ -65,6 +65,7 @@ class ErrorPayload(TypedDict):
 class HealthPayload(TypedDict):
     status: str
     last_observation_ts: str | None
+    age_seconds: float | None
     row_count: int
 
 

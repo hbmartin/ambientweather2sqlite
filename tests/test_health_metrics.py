@@ -7,7 +7,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import TestCase
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from ambientweather2sqlite.database import (
@@ -248,9 +248,13 @@ class TestServerHealthMetrics(TestCase):
         Path(self.db_path).unlink(missing_ok=True)
         create_database_if_not_exists(self.db_path)
 
+        # A fresh timestamp keeps /health "ok"; stale data returns 503.
         insert_observation(
             self.db_path,
-            {"ts": "2026-01-01 12:00:00", "outTemp": 72.0},
+            {
+                "ts": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "outTemp": 72.0,
+            },
         )
 
         self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
@@ -283,6 +287,8 @@ class TestServerHealthMetrics(TestCase):
         self.assertEqual(data["status"], "ok")
         self.assertIsNotNone(data["last_observation_ts"])
         self.assertEqual(data["row_count"], 1)
+        self.assertIsInstance(data["age_seconds"], float)
+        self.assertLess(data["age_seconds"], 180.0)
 
     def test_metrics_endpoint(self):
         data = self._get_json("/metrics")
@@ -292,3 +298,58 @@ class TestServerHealthMetrics(TestCase):
         self.assertIn("earliest_ts", data)
         self.assertIn("latest_ts", data)
         self.assertIn("column_count", data)
+
+
+class TestServerHealthStaleness(TestCase):
+    def setUp(self):
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+        Path(self.db_path).unlink(missing_ok=True)
+        create_database_if_not_exists(self.db_path)
+
+        self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
+        self.server.start()
+        self.port = self.server.httpd.server_address[1]
+        # An empty database reports "ok" (fresh-deploy grace), so readiness
+        # polling on /health works before any observation exists.
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                if self._get_json("/health")["status"] == "ok":
+                    break
+            except (OSError, URLError, json.JSONDecodeError, KeyError):
+                if time.monotonic() >= deadline:
+                    self.fail("Server not ready")
+                time.sleep(0.01)
+
+    def tearDown(self):
+        self.server.shutdown()
+        Path(self.db_path).unlink(missing_ok=True)
+
+    def _get_json(self, path: str) -> dict:
+        with urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=1) as response:
+            return json.load(response)
+
+    def test_empty_database_reports_ok(self):
+        data = self._get_json("/health")
+
+        self.assertEqual(data["status"], "ok")
+        self.assertIsNone(data["last_observation_ts"])
+        self.assertIsNone(data["age_seconds"])
+        self.assertEqual(data["row_count"], 0)
+
+    def test_stale_observation_returns_503(self):
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-01 12:00:00", "outTemp": 72.0},
+        )
+
+        with self.assertRaises(HTTPError) as ctx:
+            self._get_json("/health")
+
+        self.assertEqual(ctx.exception.code, 503)
+        data = json.load(ctx.exception)
+        self.assertEqual(data["status"], "stale")
+        self.assertGreater(data["age_seconds"], 180.0)
+        self.assertEqual(data["row_count"], 1)

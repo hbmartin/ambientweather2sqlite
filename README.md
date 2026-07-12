@@ -419,7 +419,8 @@ Returns aggregates over a single arbitrary `[start, end)` time window.
 
 ### `GET /health` - Health Check
 
-Returns the daemon health status, last observation timestamp, and row count.
+Returns the daemon health status, last observation timestamp, seconds since
+that observation, and row count.
 
 **Response:**
 
@@ -427,9 +428,17 @@ Returns the daemon health status, last observation timestamp, and row count.
 {
   "status": "ok",
   "last_observation_ts": "2026-03-12 10:30:00",
+  "age_seconds": 42.5,
   "row_count": 10000
 }
 ```
+
+If the most recent observation is older than 180 seconds (the same
+threshold `status` uses for gap detection), `status` becomes `"stale"` and
+the endpoint responds with HTTP `503` - so Docker `HEALTHCHECK`, Kubernetes
+probes, and uptime monitors alert on stalled collection out of the box. An
+empty database reports `"ok"` with `age_seconds: null`, so a freshly
+deployed daemon passes its readiness probe before the first observation.
 
 ### `GET /metrics` - Database Metrics
 
@@ -501,6 +510,7 @@ All errors return JSON with an `error` field:
 | 401    | Missing or wrong bearer token (only when `auth_token` is configured) |
 | 404    | Unknown endpoint |
 | 500    | Server error (e.g. weather station unreachable) |
+| 503    | `/health` only: most recent observation is older than 180 seconds |
 
 ## Development
 
