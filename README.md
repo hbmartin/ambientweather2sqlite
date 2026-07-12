@@ -244,6 +244,10 @@ Config file lookup order:
 2. `./aw2sqlite.toml` in the current directory
 3. `~/.aw2sqlite.toml` in the home directory
 
+The config is validated at load: `live_data_url` must start with `http://`
+or `https://`, and `port` values (top-level and `[mqtt]`) must be in
+1-65535. Invalid configs make the CLI exit with a one-line error.
+
 ## Data Collection
 
 The daemon continuously fetches live data from your weather station's HTTP endpoint, parses sensor readings from the HTML page, and inserts them into the SQLite database every 60 seconds.

@@ -253,6 +253,34 @@ class TestMainStatus(TestCase):
         )
 
 
+class TestMainConfigErrors(TestCase):
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_prints_one_line_error_on_invalid_config(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_print: Mock,
+    ):
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.side_effect = ValueError(
+            "port must be between 1 and 65535",
+        )
+
+        with self.assertRaises(SystemExit) as exc:
+            main(["status"])
+
+        self.assertEqual(exc.exception.code, 1)
+        message = mock_print.call_args.args[0]
+        self.assertIn("Configuration error in config.toml", message)
+        self.assertIn("port must be between 1 and 65535", message)
+
+
 class TestMainBackup(TestCase):
     @patch("builtins.print")
     @patch("ambientweather2sqlite.cli.commands.backup_database")

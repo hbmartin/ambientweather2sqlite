@@ -2,6 +2,7 @@ import argparse
 import json
 import sqlite3
 import sys
+import tomllib
 from pathlib import Path
 
 from ambientweather2sqlite.configuration import (
@@ -17,6 +18,7 @@ from ambientweather2sqlite.database import (
     query_db_metrics,
     query_observation_gaps,
 )
+from ambientweather2sqlite.models import AppConfig
 
 from .parser import parse_args
 
@@ -27,9 +29,18 @@ def _resolve_config(args: argparse.Namespace) -> Path:
     return create_config_file(default_config_path)
 
 
+def _load_config_or_exit(config_path: Path) -> AppConfig:
+    """Load the config, printing a one-line error instead of a traceback."""
+    try:
+        return load_config(config_path)
+    except (TypeError, ValueError, tomllib.TOMLDecodeError) as e:
+        print(f"Configuration error in {config_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_serve(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
-    config = load_config(config_path)
+    config = _load_config_or_exit(config_path)
     create_database_if_not_exists(config.database_path)
     start_daemon(
         live_data_url=config.live_data_url,
@@ -50,13 +61,13 @@ def _cmd_config(args: argparse.Namespace) -> None:
 
 def _cmd_once(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
-    config = load_config(config_path)
+    config = _load_config_or_exit(config_path)
     fetch_once(config.live_data_url)
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
-    config = load_config(config_path)
+    config = _load_config_or_exit(config_path)
     if not Path(config.database_path).exists():
         print(f"Database not found at {config.database_path}")
         sys.exit(1)
@@ -71,7 +82,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
 def _cmd_export(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
-    config = load_config(config_path)
+    config = _load_config_or_exit(config_path)
     if not Path(config.database_path).exists():
         print(f"Database not found at {config.database_path}", file=sys.stderr)
         sys.exit(1)
@@ -99,7 +110,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
 
 def _cmd_backup(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
-    config = load_config(config_path)
+    config = _load_config_or_exit(config_path)
     if not Path(config.database_path).exists():
         print(f"Database not found at {config.database_path}", file=sys.stderr)
         sys.exit(1)

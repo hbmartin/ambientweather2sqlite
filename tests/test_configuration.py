@@ -96,7 +96,7 @@ class TestConfiguration(TestCase):
         self.assertTrue(config.mqtt.tls)
         self.assertEqual(config.mqtt.client_id, "aw2sqlite")
 
-    def test_load_config_preserves_explicit_mqtt_port_zero(self):
+    def test_load_config_rejects_mqtt_port_zero(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"
             config_path.write_text(
@@ -110,10 +110,75 @@ class TestConfiguration(TestCase):
                 encoding="utf-8",
             )
 
+            with self.assertRaisesRegex(
+                ValueError,
+                "mqtt.port must be between 1 and 65535",
+            ):
+                load_config(config_path)
+
+    def test_load_config_rejects_out_of_range_port(self):
+        for bad_port in (0, -1, 65536):
+            with self.subTest(port=bad_port), tempfile.TemporaryDirectory() as temp_dir:
+                config_path = Path(temp_dir) / "aw2sqlite.toml"
+                config_path.write_text(
+                    'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                    'database_path = "/tmp/aw2sqlite.db"\n'
+                    f"port = {bad_port}\n",
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "port must be between 1 and 65535",
+                ):
+                    load_config(config_path)
+
+    def test_load_config_accepts_valid_port_bounds(self):
+        for good_port in (1, 443, 65535):
+            with (
+                self.subTest(port=good_port),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                config_path = Path(temp_dir) / "aw2sqlite.toml"
+                config_path.write_text(
+                    'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                    'database_path = "/tmp/aw2sqlite.db"\n'
+                    f"port = {good_port}\n",
+                    encoding="utf-8",
+                )
+
+                config = load_config(config_path)
+
+                self.assertEqual(config.port, good_port)
+
+    def test_load_config_rejects_non_http_live_data_url(self):
+        for bad_url in ("ftp://127.0.0.1/livedata.htm", "station.local"):
+            with self.subTest(url=bad_url), tempfile.TemporaryDirectory() as temp_dir:
+                config_path = Path(temp_dir) / "aw2sqlite.toml"
+                config_path.write_text(
+                    f'live_data_url = "{bad_url}"\n'
+                    'database_path = "/tmp/aw2sqlite.db"\n',
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "live_data_url must start with http:// or https://",
+                ):
+                    load_config(config_path)
+
+    def test_load_config_accepts_https_live_data_url(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "https://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n',
+                encoding="utf-8",
+            )
+
             config = load_config(config_path)
 
-        assert config.mqtt is not None
-        self.assertEqual(config.mqtt.port, 0)
+        self.assertEqual(config.live_data_url, "https://127.0.0.1/livedata.htm")
 
     def test_load_config_rejects_mqtt_without_topic(self):
         with tempfile.TemporaryDirectory() as temp_dir:
