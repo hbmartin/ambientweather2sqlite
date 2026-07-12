@@ -141,6 +141,12 @@ def _optional_mqtt(config_data: dict[str, object]) -> MqttConfig | None:
         password=_optional_str_or_none(mqtt_table, "password"),
         client_id=_optional_str(mqtt_table, "client_id", "aw2sqlite"),
         tls=_optional_bool(mqtt_table, "tls", default=False),
+        discovery=_optional_bool(mqtt_table, "discovery", default=False),
+        discovery_prefix=_optional_str(
+            mqtt_table,
+            "discovery_prefix",
+            "homeassistant",
+        ),
     )
 
 

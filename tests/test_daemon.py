@@ -15,7 +15,7 @@ from ambientweather2sqlite.daemon import (
     start_daemon,
     wait_for_next_update,
 )
-from ambientweather2sqlite.models import AlertConfig
+from ambientweather2sqlite.models import AlertConfig, MqttConfig
 
 
 class TestDaemonHelpers(TestCase):
@@ -90,6 +90,89 @@ class TestDaemonHelpers(TestCase):
         thread.start()
         thread.join()
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
+
+
+class TestDaemonDiscovery(TestCase):
+    _MQTT_DISCOVERY_CONFIG = MqttConfig(
+        host="127.0.0.1",
+        topic="weather/obs",
+        discovery=True,
+    )
+
+    def _run_daemon(
+        self,
+        mqtt_config,
+        create_metadata_result,
+    ) -> tuple[Mock, Mock]:
+        logger = Mock()
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=create_metadata_result,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.publish_message",
+            ) as mock_publish_message,
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"outTemp": 72.5},
+            ),
+            patch("ambientweather2sqlite.daemon.insert_observation"),
+            patch("ambientweather2sqlite.daemon._publish_observation"),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit):
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    mqtt_config=mqtt_config,
+                )
+        return logger, mock_publish_message
+
+    def test_discovery_publishes_retained_configs_at_startup(self):
+        _logger, mock_publish_message = self._run_daemon(
+            self._MQTT_DISCOVERY_CONFIG,
+            ({"outTemp": "Outdoor Temperature (degF)"}, {"outTemp": "fahrenheit"}),
+        )
+
+        mock_publish_message.assert_called_once()
+        topic = mock_publish_message.call_args.args[1]
+        self.assertEqual(
+            topic,
+            "homeassistant/sensor/aw2sqlite_aw2sqlite/outTemp/config",
+        )
+        self.assertTrue(mock_publish_message.call_args.kwargs["retain"])
+
+    def test_discovery_skipped_when_metadata_empty(self):
+        logger, mock_publish_message = self._run_daemon(
+            self._MQTT_DISCOVERY_CONFIG,
+            ({}, {}),
+        )
+
+        mock_publish_message.assert_not_called()
+        warning_messages = [c.args[0] for c in logger.warning.call_args_list if c.args]
+        self.assertTrue(
+            any("Skipping MQTT discovery" in m for m in warning_messages),
+        )
+
+    def test_discovery_disabled_by_default(self):
+        _logger, mock_publish_message = self._run_daemon(
+            MqttConfig(host="127.0.0.1", topic="weather/obs"),
+            ({"outTemp": "Outdoor Temperature (degF)"}, {"outTemp": "fahrenheit"}),
+        )
+
+        mock_publish_message.assert_not_called()
 
 
 class TestDaemonAlerts(TestCase):

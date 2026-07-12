@@ -136,16 +136,26 @@ def create_request_handler(  # noqa: C901
             labels = extract_labels(body)
             self._send_json(build_live_data_payload(values, labels))
 
-        def _send_query_response(self, build: Callable[[], JsonResponse]) -> None:
-            """Send the built payload, mapping validation errors to 400."""
+        def _send_query_response(
+            self,
+            build: Callable[[], JsonResponse | tuple[JsonResponse, int]],
+        ) -> None:
+            """Send the built payload, mapping validation errors to 400.
+
+            Builders may return a bare payload (sent with 200) or a
+            (payload, status) tuple to control the HTTP status code.
+            """
             try:
-                self._send_json(build())
+                result = build()
             except Aw2SqliteError as e:
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 400)
             except Exception as e:  # noqa: BLE001
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 500)
+            else:
+                payload, status = result if isinstance(result, tuple) else (result, 200)
+                self._send_json(payload, status)
 
         def _send_daily_aggregated_data(self) -> None:
             query: QueryParams = parse_qs(urlparse(self.path).query)
@@ -267,16 +277,7 @@ def create_request_handler(  # noqa: C901
             return payload, 503 if stale else 200
 
         def _send_health(self) -> None:
-            try:
-                payload, status = self._build_health_payload()
-            except Aw2SqliteError as e:
-                self.log_message("%s\n%s", type(e).__name__, str(e))
-                self._send_json(build_error_payload(str(e)), 400)
-            except Exception as e:  # noqa: BLE001
-                self.log_message("%s\n%s", type(e).__name__, str(e))
-                self._send_json(build_error_payload(str(e)), 500)
-            else:
-                self._send_json(payload, status)
+            self._send_query_response(self._build_health_payload)
 
         def _wants_prometheus(self, query: QueryParams) -> bool:
             if fmt := query.get("format", []):

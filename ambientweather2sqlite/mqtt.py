@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 _CONNECT = 0x10
 _CONNACK = 0x20
 _PUBLISH = 0x30
+_RETAIN_FLAG = 0x01
 _DISCONNECT = 0xE0
 _PROTOCOL_LEVEL = 4  # MQTT 3.1.1
 _CONNECT_TIMEOUT_SECONDS = 5.0
@@ -90,9 +91,10 @@ def _connect_packet(config: MqttConfig) -> bytes:
     return bytes([_CONNECT]) + _encode_remaining_length(len(body)) + body
 
 
-def _publish_packet(topic: str, payload: bytes) -> bytes:
+def _publish_packet(topic: str, payload: bytes, *, retain: bool = False) -> bytes:
+    fixed_header = _PUBLISH | _RETAIN_FLAG if retain else _PUBLISH
     body = _encode_string(topic) + payload
-    return bytes([_PUBLISH]) + _encode_remaining_length(len(body)) + body
+    return bytes([fixed_header]) + _encode_remaining_length(len(body)) + body
 
 
 def _read_exact(sock: socket.socket, length: int) -> bytes:
@@ -126,8 +128,14 @@ def _open_socket(config: MqttConfig) -> socket.socket:
     return sock
 
 
-def publish(config: MqttConfig, payload: str) -> None:
-    """Publish a single message at QoS 0 and disconnect.
+def publish_message(
+    config: MqttConfig,
+    topic: str,
+    payload: str,
+    *,
+    retain: bool = False,
+) -> None:
+    """Publish a single message to a topic at QoS 0 and disconnect.
 
     Connecting per message keeps failure handling trivial for a once-a-minute
     publish cadence; a persistent session would save little and require
@@ -141,5 +149,18 @@ def publish(config: MqttConfig, payload: str) -> None:
     with _open_socket(config) as sock:
         sock.sendall(_connect_packet(config))
         _read_connack(sock)
-        sock.sendall(_publish_packet(config.topic, payload.encode("utf-8")))
+        sock.sendall(
+            _publish_packet(topic, payload.encode("utf-8"), retain=retain),
+        )
         sock.sendall(bytes([_DISCONNECT, 0]))
+
+
+def publish(config: MqttConfig, payload: str) -> None:
+    """Publish a single message to the configured topic at QoS 0.
+
+    Raises:
+        MqttError: If the broker rejects the connection.
+        OSError: On network failures (including timeouts).
+
+    """
+    publish_message(config, config.topic, payload)

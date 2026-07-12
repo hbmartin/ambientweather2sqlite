@@ -25,6 +25,7 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 * **Data Export:** Dump observations as CSV or JSON, with optional time bounds
 * **Prometheus Metrics:** `/metrics` serves the Prometheus text format for Grafana dashboards
 * **MQTT Publishing:** Optional per-observation publish to an MQTT broker (e.g. Home Assistant)
+* **Home Assistant Discovery:** Optional retained MQTT discovery configs so sensors auto-appear in HA with correct units
 * **Webhook Alerts:** Optional webhook notification when the station goes offline or recovers
 * **API Authentication:** Optional bearer token and configurable bind address for the HTTP server
 * **macOS & Linux Services:** Generate launchd plists or systemd user units for running as a background daemon
@@ -244,6 +245,8 @@ username = "user"       # optional
 password = "pass"       # optional
 client_id = "aw2sqlite" # optional
 tls = false             # optional (default: false)
+discovery = false       # optional; publish Home Assistant discovery configs
+discovery_prefix = "homeassistant" # optional
 ```
 
 Config file lookup order:
@@ -254,6 +257,19 @@ Config file lookup order:
 The config is validated at load: `live_data_url` must start with `http://`
 or `https://`, and `port` values (top-level and `[mqtt]`) must be in
 1-65535. Invalid configs make the CLI exit with a one-line error.
+
+### Home Assistant
+
+With `discovery = true` in the `[mqtt]` table, the daemon publishes one
+retained [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+config message per sensor at startup (under
+`<discovery_prefix>/sensor/aw2sqlite_<client_id>/<column>/config`). Home
+Assistant then creates the entities automatically, with names, units, and
+device classes derived from the station's own labels and unit settings.
+Sensor values are read from the regular observation topic via a value
+template, so no extra state publishing happens. Retained configs persist
+across Home Assistant restarts; set `discovery_prefix` if your HA instance
+uses a non-default prefix.
 
 ## Data Collection
 

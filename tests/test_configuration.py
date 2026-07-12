@@ -96,6 +96,63 @@ class TestConfiguration(TestCase):
         self.assertTrue(config.mqtt.tls)
         self.assertEqual(config.mqtt.client_id, "aw2sqlite")
 
+    def test_load_config_parses_mqtt_discovery_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[mqtt]\n"
+                'host = "broker.local"\n'
+                'topic = "weather/observations"\n'
+                "discovery = true\n"
+                'discovery_prefix = "ha"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        assert config.mqtt is not None
+        self.assertTrue(config.mqtt.discovery)
+        self.assertEqual(config.mqtt.discovery_prefix, "ha")
+
+    def test_load_config_mqtt_discovery_defaults(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[mqtt]\n"
+                'host = "broker.local"\n'
+                'topic = "weather/observations"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        assert config.mqtt is not None
+        self.assertFalse(config.mqtt.discovery)
+        self.assertEqual(config.mqtt.discovery_prefix, "homeassistant")
+
+    def test_load_config_rejects_non_bool_discovery(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[mqtt]\n"
+                'host = "broker.local"\n'
+                'topic = "weather/observations"\n'
+                'discovery = "yes"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TypeError, "discovery must be a boolean"):
+                load_config(config_path)
+
     def test_load_config_parses_alerts_table(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"

@@ -24,6 +24,8 @@ class MqttConfig:
     password: str | None = None
     client_id: str = "aw2sqlite"
     tls: bool = False
+    discovery: bool = False
+    discovery_prefix: str = "homeassistant"
 
 
 @dataclass(frozen=True, slots=True)

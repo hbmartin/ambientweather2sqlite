@@ -17,9 +17,10 @@ from ambientweather2sqlite.server import Server
 
 from .alerts import AlertNotifier
 from .database import insert_observation
+from .ha_discovery import build_discovery_messages
 from .metadata import create_metadata
-from .models import AlertConfig, MqttConfig
-from .mqtt import MqttError, publish
+from .models import AlertConfig, ColumnUnitMap, MqttConfig
+from .mqtt import MqttError, publish, publish_message
 
 
 class _JsonFormatter(logging.Formatter):
@@ -138,6 +139,29 @@ def _publish_observation(
         logger.warning("MQTT publish failed: %s", e)
 
 
+def _publish_discovery(
+    logger: logging.Logger,
+    mqtt_config: MqttConfig | None,
+    labels: dict[str, str],
+    column_to_unit: ColumnUnitMap,
+) -> None:
+    """Publish retained Home Assistant discovery configs, once at startup."""
+    if mqtt_config is None or not mqtt_config.discovery:
+        return
+    if not labels:
+        logger.warning("Skipping MQTT discovery: no sensor metadata available")
+        return
+    try:
+        for topic, payload in build_discovery_messages(
+            labels,
+            column_to_unit,
+            mqtt_config,
+        ):
+            publish_message(mqtt_config, topic, payload, retain=True)
+    except (MqttError, OSError) as e:
+        logger.warning("MQTT discovery publish failed: %s", e)
+
+
 def _collect_forever(  # noqa: PLR0913
     live_data_url: str,
     database_path: str,
@@ -216,11 +240,14 @@ def start_daemon(  # noqa: PLR0913
     logger = _configure_logging(log_path, log_format=log_format)
 
     labels: dict[str, str] = {}
+    column_to_unit: ColumnUnitMap = {}
     try:
-        labels, _ = create_metadata(database_path, live_data_url)
+        labels, column_to_unit = create_metadata(database_path, live_data_url)
     except (HTTPException, TimeoutError) as e:
         logger.info("%s\n%s", type(e).__name__, e)
         print(f"Error fetching metadata: {e}")
+
+    _publish_discovery(logger, mqtt_config, labels, column_to_unit)
 
     server = None
 
