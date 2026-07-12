@@ -240,6 +240,25 @@ class TestDataValidation(TestCase):
         )
 
 
+def _wait_for_health_ok(test: TestCase, port: int, timeout: float = 2.0) -> None:
+    """Poll /health until it reports "ok" or fail the test on timeout.
+
+    An empty database reports "ok" (fresh-deploy grace), so this works
+    before any observation exists.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            url = f"http://127.0.0.1:{port}/health"
+            with urlopen(url, timeout=1) as response:
+                if json.load(response)["status"] == "ok":
+                    return
+        except (OSError, URLError, json.JSONDecodeError, KeyError):
+            if time.monotonic() >= deadline:
+                test.fail("Server not ready")
+            time.sleep(0.01)
+
+
 class TestServerHealthMetrics(TestCase):
     def setUp(self):
         self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -260,22 +279,11 @@ class TestServerHealthMetrics(TestCase):
         self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
         self.server.start()
         self.port = self.server.httpd.server_address[1]
-        self._wait_for_server_ready()
+        _wait_for_health_ok(self, self.port)
 
     def tearDown(self):
         self.server.shutdown()
         Path(self.db_path).unlink(missing_ok=True)
-
-    def _wait_for_server_ready(self, timeout: float = 2.0) -> None:
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                if self._get_json("/health")["status"] == "ok":
-                    return
-            except (OSError, URLError, json.JSONDecodeError, KeyError):
-                if time.monotonic() >= deadline:
-                    self.fail("Server not ready")
-                time.sleep(0.01)
 
     def _get_json(self, path: str) -> dict:
         with urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=1) as response:
@@ -311,17 +319,7 @@ class TestServerHealthStaleness(TestCase):
         self.server = Server("http://127.0.0.1:9", self.db_path, 0, "127.0.0.1")
         self.server.start()
         self.port = self.server.httpd.server_address[1]
-        # An empty database reports "ok" (fresh-deploy grace), so readiness
-        # polling on /health works before any observation exists.
-        deadline = time.monotonic() + 2.0
-        while True:
-            try:
-                if self._get_json("/health")["status"] == "ok":
-                    break
-            except (OSError, URLError, json.JSONDecodeError, KeyError):
-                if time.monotonic() >= deadline:
-                    self.fail("Server not ready")
-                time.sleep(0.01)
+        _wait_for_health_ok(self, self.port)
 
     def tearDown(self):
         self.server.shutdown()

@@ -14,13 +14,13 @@ from ambientweather2sqlite.exceptions import Aw2SqliteError, MissingTimezoneErro
 from . import mureq
 from .awparser import extract_labels, extract_values
 from .database import (
+    DEFAULT_GAP_THRESHOLD_SECONDS,
+    parse_stored_timestamp,
     query_daily_aggregated_data,
     query_db_metrics,
     query_hourly_aggregated_data,
-    query_latest_timestamp,
     query_range_aggregated_data,
 )
-from .database.connection import _parse_stored_timestamp
 from .database.metrics import query_latest_observation
 from .models import (
     HealthPayload,
@@ -35,8 +35,6 @@ from .models import (
 from .prometheus import build_prometheus_metrics
 
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
-# Matches the default gap threshold used by the status command.
-_STALE_THRESHOLD_SECONDS = 180.0
 
 
 def _tz_from_query(query: QueryParams) -> str:
@@ -254,20 +252,20 @@ def create_request_handler(  # noqa: C901
             An empty database stays "ok" so a freshly deployed daemon does
             not fail its readiness probe before the first observation.
             """
-            latest_ts = query_latest_timestamp(self.DB_PATH)
             metrics = query_db_metrics(self.DB_PATH)
+            latest_ts = metrics["latest_ts"]
             age_seconds: float | None = None
             stale = False
             if latest_ts is not None:
                 current_time = now if now is not None else datetime.now(UTC)
                 try:
                     age_seconds = (
-                        current_time - _parse_stored_timestamp(latest_ts)
+                        current_time - parse_stored_timestamp(latest_ts)
                     ).total_seconds()
-                except ValueError:
+                except (ValueError, TypeError):
                     stale = True
                 else:
-                    stale = age_seconds > _STALE_THRESHOLD_SECONDS
+                    stale = age_seconds > DEFAULT_GAP_THRESHOLD_SECONDS
             payload: HealthPayload = {
                 "status": "stale" if stale else "ok",
                 "last_observation_ts": latest_ts,

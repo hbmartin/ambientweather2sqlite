@@ -20,6 +20,10 @@ from .connection import (
 if TYPE_CHECKING:
     from ambientweather2sqlite.models import DbMetrics, Observation, ObservationGap
 
+# Seconds without an observation before data is considered missing; shared
+# by the status command's gap scan and the /health staleness check.
+DEFAULT_GAP_THRESHOLD_SECONDS = 180.0
+
 
 def _normalize_current_time(now: datetime | None) -> datetime:
     if now is None:
@@ -89,7 +93,7 @@ def query_observation_gaps(
     db_path: str,
     *,
     hours: int = 24,
-    threshold_seconds: float = 180.0,
+    threshold_seconds: float = DEFAULT_GAP_THRESHOLD_SECONDS,
     now: datetime | None = None,
 ) -> list[ObservationGap]:
     """Find periods without observations within the last `hours` hours.

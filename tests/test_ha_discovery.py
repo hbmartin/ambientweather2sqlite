@@ -51,7 +51,7 @@ class TestBuildDiscoveryMessages(TestCase):
         self.assertEqual(payload["name"], "Outdoor Temperature")
         self.assertEqual(payload["state_topic"], "weather/observations")
         self.assertEqual(payload["value_template"], "{{ value_json.outTemp }}")
-        self.assertEqual(payload["unique_id"], "aw2sqlite_outTemp")
+        self.assertEqual(payload["unique_id"], "aw2sqlite_aw2sqlite_outTemp")
         self.assertEqual(payload["unit_of_measurement"], "°F")
         self.assertEqual(payload["device_class"], "temperature")
         self.assertEqual(payload["state_class"], "measurement")

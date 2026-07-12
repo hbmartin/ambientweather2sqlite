@@ -66,12 +66,17 @@ def _cmd_once(args: argparse.Namespace) -> None:
     fetch_once(config.live_data_url)
 
 
+def _require_database(database_path: str) -> None:
+    """Exit with an error if the configured database does not exist."""
+    if not Path(database_path).exists():
+        print(f"Database not found at {database_path}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_status(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
     config = _load_config_or_exit(config_path)
-    if not Path(config.database_path).exists():
-        print(f"Database not found at {config.database_path}")
-        sys.exit(1)
+    _require_database(config.database_path)
     metrics = query_db_metrics(config.database_path)
     gaps = query_observation_gaps(
         config.database_path,
@@ -84,9 +89,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
 def _cmd_export(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
     config = _load_config_or_exit(config_path)
-    if not Path(config.database_path).exists():
-        print(f"Database not found at {config.database_path}", file=sys.stderr)
-        sys.exit(1)
+    _require_database(config.database_path)
 
     if args.output is None:
         export_observations(
@@ -112,9 +115,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
 def _cmd_backup(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
     config = _load_config_or_exit(config_path)
-    if not Path(config.database_path).exists():
-        print(f"Database not found at {config.database_path}", file=sys.stderr)
-        sys.exit(1)
+    _require_database(config.database_path)
     try:
         backup_size = backup_database(config.database_path, str(args.destination))
     except (OSError, sqlite3.Error) as e:

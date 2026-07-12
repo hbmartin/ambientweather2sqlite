@@ -19,7 +19,7 @@ from .alerts import AlertNotifier
 from .database import insert_observation
 from .ha_discovery import build_discovery_messages
 from .metadata import create_metadata
-from .models import AlertConfig, ColumnUnitMap, MqttConfig
+from .models import AlertConfig, ColumnUnitMap, LabelMap, MqttConfig
 from .mqtt import MqttError, publish, publish_message
 
 
@@ -142,7 +142,7 @@ def _publish_observation(
 def _publish_discovery(
     logger: logging.Logger,
     mqtt_config: MqttConfig | None,
-    labels: dict[str, str],
+    labels: LabelMap,
     column_to_unit: ColumnUnitMap,
 ) -> None:
     """Publish retained Home Assistant discovery configs, once at startup."""
@@ -162,10 +162,23 @@ def _publish_discovery(
         logger.warning("MQTT discovery publish failed: %s", e)
 
 
+def _record_failure_and_wait(
+    notifier: AlertNotifier | None,
+    epoch: float,
+    period_seconds: int,
+) -> None:
+    """Count a failed collection attempt and sleep until the next slot."""
+    if notifier is not None:
+        notifier.record_failure()
+    wait_for_next_update(
+        next_deadline(epoch, period_seconds, time.monotonic()),
+    )
+
+
 def _collect_forever(  # noqa: PLR0913
     live_data_url: str,
     database_path: str,
-    labels: dict[str, str],
+    labels: LabelMap,
     logger: logging.Logger,
     mqtt_config: MqttConfig | None,
     period_seconds: int,
@@ -189,12 +202,8 @@ def _collect_forever(  # noqa: PLR0913
         except HTTPException as e:
             logger.info("%s\n%s", type(e).__name__, e)
             print(f"Error fetching live data: {e}")
-            if notifier is not None:
-                notifier.record_failure()
             remove_newlines = 1
-            wait_for_next_update(
-                next_deadline(epoch, period_seconds, time.monotonic()),
-            )
+            _record_failure_and_wait(notifier, epoch, period_seconds)
             continue
         if not live_data:
             # An unparseable page means no data is flowing, so it counts
@@ -205,12 +214,8 @@ def _collect_forever(  # noqa: PLR0913
                 live_data_url,
             )
             print("Warning: parsed 0 sensors from station page")
-            if notifier is not None:
-                notifier.record_failure()
             remove_newlines = 1
-            wait_for_next_update(
-                next_deadline(epoch, period_seconds, time.monotonic()),
-            )
+            _record_failure_and_wait(notifier, epoch, period_seconds)
             continue
         if notifier is not None:
             notifier.record_success()

@@ -86,7 +86,7 @@ def build_discovery_messages(
             "name": _display_name(label),
             "state_topic": config.topic,
             "value_template": f"{{{{ value_json.{column} }}}}",
-            "unique_id": f"aw2sqlite_{column}",
+            "unique_id": f"{node_id}_{column}",
             "state_class": "measurement",
             "device": device,
         }

@@ -78,11 +78,9 @@ def units_for_columns(
     labels_with_units: LabelMap = {}
     for column, label in labels.items():
         labels_with_units[column] = label
-        unit = match_label_unit(label)
-        if unit is None:
+        if (unit := match_label_unit(label)) is None:
             continue
-        raw_unit = units.get(unit)
-        if raw_unit is None:
+        if (raw_unit := units.get(unit)) is None:
             continue
         column_to_unit[column] = AW_UNIT_TO_PINT_UNIT.get(raw_unit, raw_unit)
         labels_with_units[column] = f"{label} ({raw_unit})"

@@ -2,6 +2,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from ambientweather2sqlite.database import DEFAULT_GAP_THRESHOLD_SECONDS
+
 _SUBCOMMANDS = {
     "serve",
     "config",
@@ -94,7 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     status_parser.add_argument(
         "--gap-threshold",
         type=float,
-        default=180.0,
+        default=DEFAULT_GAP_THRESHOLD_SECONDS,
         help="Minimum seconds between observations to report a gap (default: 180).",
     )
 
