@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -14,10 +15,12 @@ from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
 from ambientweather2sqlite.server import Server
 
+from .alerts import AlertNotifier
 from .database import insert_observation
+from .ha_discovery import build_discovery_messages
 from .metadata import create_metadata
-from .models import MqttConfig
-from .mqtt import MqttError, publish
+from .models import AlertConfig, ColumnUnitMap, LabelMap, MqttConfig
+from .mqtt import MqttError, publish, publish_message
 
 
 class _JsonFormatter(logging.Formatter):
@@ -105,6 +108,11 @@ def fetch_once(live_data_url: str) -> None:
     except HTTPException as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    if not live_data:
+        print(
+            "Warning: parsed 0 sensors - the station page format may have changed",
+            file=sys.stderr,
+        )
     print(json.dumps(live_data, indent=4))
 
 
@@ -131,6 +139,97 @@ def _publish_observation(
         logger.warning("MQTT publish failed: %s", e)
 
 
+def _publish_discovery(
+    logger: logging.Logger,
+    mqtt_config: MqttConfig | None,
+    labels: LabelMap,
+    column_to_unit: ColumnUnitMap,
+) -> None:
+    """Publish retained Home Assistant discovery configs, once at startup."""
+    if mqtt_config is None or not mqtt_config.discovery:
+        return
+    if not labels:
+        logger.warning("Skipping MQTT discovery: no sensor metadata available")
+        return
+    try:
+        for topic, payload in build_discovery_messages(
+            labels,
+            column_to_unit,
+            mqtt_config,
+        ):
+            publish_message(mqtt_config, topic, payload, retain=True)
+    except (MqttError, OSError) as e:
+        logger.warning("MQTT discovery publish failed: %s", e)
+
+
+def _record_failure_and_wait(
+    notifier: AlertNotifier | None,
+    epoch: float,
+    period_seconds: int,
+) -> None:
+    """Count a failed collection attempt and sleep until the next slot."""
+    if notifier is not None:
+        notifier.record_failure()
+    wait_for_next_update(
+        next_deadline(epoch, period_seconds, time.monotonic()),
+    )
+
+
+def _collect_forever(  # noqa: PLR0913
+    live_data_url: str,
+    database_path: str,
+    labels: LabelMap,
+    logger: logging.Logger,
+    mqtt_config: MqttConfig | None,
+    period_seconds: int,
+    notifier: AlertNotifier | None = None,
+) -> None:
+    """Fetch, print, store, and publish observations until interrupted."""
+    remove_newlines = 0
+    epoch = time.monotonic()
+    while True:
+        clear_lines(remove_newlines)
+        try:
+            body = mureq.get(live_data_url)
+            live_data = extract_values(body)
+        except TimeoutError:
+            logger.info("TimeoutError")
+            print("Warming up weather station's server...")
+            if notifier is not None:
+                notifier.record_failure()
+            remove_newlines = 1
+            continue
+        except HTTPException as e:
+            logger.info("%s\n%s", type(e).__name__, e)
+            print(f"Error fetching live data: {e}")
+            remove_newlines = 1
+            _record_failure_and_wait(notifier, epoch, period_seconds)
+            continue
+        if not live_data:
+            # An unparseable page means no data is flowing, so it counts
+            # toward the offline alert just like a failed fetch.
+            logger.warning(
+                "Parsed 0 sensors from %s - "
+                "the station page format may have changed",
+                live_data_url,
+            )
+            print("Warning: parsed 0 sensors from station page")
+            remove_newlines = 1
+            _record_failure_and_wait(notifier, epoch, period_seconds)
+            continue
+        if notifier is not None:
+            notifier.record_success()
+        remove_newlines = _print_observation(labels, live_data)
+        try:
+            insert_observation(database_path, live_data)
+        except sqlite3.Error as e:
+            logger.warning("Failed to insert observation: %s", e)
+        _publish_observation(logger, mqtt_config, live_data)
+        wait_for_next_update(
+            next_deadline(epoch, period_seconds, time.monotonic()),
+        )
+
+
 def start_daemon(  # noqa: PLR0913
     live_data_url: str,
     database_path: str,
@@ -141,6 +240,7 @@ def start_daemon(  # noqa: PLR0913
     host: str = "localhost",
     auth_token: str | None = None,
     mqtt_config: MqttConfig | None = None,
+    alert_config: AlertConfig | None = None,
 ) -> None:
     print(f"Observing {live_data_url}")
     print("Press Ctrl+C to stop")
@@ -149,11 +249,14 @@ def start_daemon(  # noqa: PLR0913
     logger = _configure_logging(log_path, log_format=log_format)
 
     labels: dict[str, str] = {}
+    column_to_unit: ColumnUnitMap = {}
     try:
-        labels, _ = create_metadata(database_path, live_data_url)
+        labels, column_to_unit = create_metadata(database_path, live_data_url)
     except (HTTPException, TimeoutError) as e:
         logger.info("%s\n%s", type(e).__name__, e)
         print(f"Error fetching metadata: {e}")
+
+    _publish_discovery(logger, mqtt_config, labels, column_to_unit)
 
     server = None
 
@@ -162,34 +265,23 @@ def start_daemon(  # noqa: PLR0913
         server = Server(live_data_url, database_path, port, host, auth_token)
         server.start()
 
+    notifier = (
+        AlertNotifier(alert_config, live_data_url, logger)
+        if alert_config is not None
+        else None
+    )
+
     _install_sigterm_handler()
-    remove_newlines = 0
-    epoch = time.monotonic()
     try:
-        while True:
-            clear_lines(remove_newlines)
-            try:
-                body = mureq.get(live_data_url)
-                live_data = extract_values(body)
-            except TimeoutError:
-                logger.info("TimeoutError")
-                print("Warming up weather station's server...")
-                remove_newlines = 1
-                continue
-            except HTTPException as e:
-                logger.info("%s\n%s", type(e).__name__, e)
-                print(f"Error fetching live data: {e}")
-                remove_newlines = 1
-                wait_for_next_update(
-                    next_deadline(epoch, period_seconds, time.monotonic()),
-                )
-                continue
-            remove_newlines = _print_observation(labels, live_data)
-            insert_observation(database_path, live_data)
-            _publish_observation(logger, mqtt_config, live_data)
-            wait_for_next_update(
-                next_deadline(epoch, period_seconds, time.monotonic()),
-            )
+        _collect_forever(
+            live_data_url,
+            database_path,
+            labels,
+            logger,
+            mqtt_config,
+            period_seconds,
+            notifier,
+        )
     except KeyboardInterrupt:
         print(f"\nStopping... results saved to {database_path}")
         if server is not None:

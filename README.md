@@ -25,6 +25,8 @@ A project to record minute-by-minute weather observations from an AmbientWeather
 * **Data Export:** Dump observations as CSV or JSON, with optional time bounds
 * **Prometheus Metrics:** `/metrics` serves the Prometheus text format for Grafana dashboards
 * **MQTT Publishing:** Optional per-observation publish to an MQTT broker (e.g. Home Assistant)
+* **Home Assistant Discovery:** Optional retained MQTT discovery configs so sensors auto-appear in HA with correct units
+* **Webhook Alerts:** Optional webhook notification when the station goes offline or recovers
 * **API Authentication:** Optional bearer token and configurable bind address for the HTTP server
 * **macOS & Linux Services:** Generate launchd plists or systemd user units for running as a background daemon
 * **Docker Support:** Dockerfile and compose example included
@@ -87,6 +89,7 @@ aw2sqlite <command> [options]
 | `once` | Fetch a single observation and print it as JSON (no DB write) |
 | `status` | Show database metrics (row count, file size, timestamp range) and observation gaps |
 | `export` | Export observations as CSV or JSON |
+| `backup` | Write a compacted backup copy of the database (safe while the daemon is running) |
 | `install-launchd` | Generate a macOS launchd plist for running as a service |
 | `install-systemd` | Generate a systemd user unit for running as a service (Linux) |
 
@@ -175,6 +178,21 @@ and are compared against the stored `ts` column.
 aw2sqlite export --format csv --start 2026-01-01 --end 2026-02-01 --output january.csv
 ```
 
+### `aw2sqlite backup`
+
+```bash
+aw2sqlite backup DESTINATION [--config CONFIG_PATH]
+```
+
+Writes a compacted, self-contained copy of the database to `DESTINATION`
+using SQLite's `VACUUM INTO`. This is safe while the daemon is running (a
+raw file copy of a WAL database is not) and the destination must not
+already exist.
+
+```bash
+aw2sqlite backup /backups/aw2sqlite-$(date +%F).db
+```
+
 ### `aw2sqlite install-launchd`
 
 ```bash
@@ -212,6 +230,12 @@ host = "localhost"  # optional bind address; use "0.0.0.0" to expose on the netw
 auth_token = "s3cret" # optional; require "Authorization: Bearer s3cret" on API requests
 log_format = "text" # optional, "text" (default) or "json" for JSONL logs
 
+# Optional: POST a webhook when the station goes offline / comes back
+[alerts]
+webhook_url = "https://hooks.example.com/alert"
+failure_threshold = 3  # optional; consecutive failed fetches before alerting
+timeout_seconds = 5.0  # optional; webhook request timeout
+
 # Optional: publish each observation as JSON to an MQTT broker
 [mqtt]
 host = "192.168.0.10"
@@ -221,12 +245,31 @@ username = "user"       # optional
 password = "pass"       # optional
 client_id = "aw2sqlite" # optional
 tls = false             # optional (default: false)
+discovery = false       # optional; publish Home Assistant discovery configs
+discovery_prefix = "homeassistant" # optional
 ```
 
 Config file lookup order:
 1. Path provided via `--config`
 2. `./aw2sqlite.toml` in the current directory
 3. `~/.aw2sqlite.toml` in the home directory
+
+The config is validated at load: `live_data_url` must start with `http://`
+or `https://`, and `port` values (top-level and `[mqtt]`) must be in
+1-65535. Invalid configs make the CLI exit with a one-line error.
+
+### Home Assistant
+
+With `discovery = true` in the `[mqtt]` table, the daemon publishes one
+retained [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+config message per sensor at startup (under
+`<discovery_prefix>/sensor/aw2sqlite_<client_id>/<column>/config`). Home
+Assistant then creates the entities automatically, with names, units, and
+device classes derived from the station's own labels and unit settings.
+Sensor values are read from the regular observation topic via a value
+template, so no extra state publishing happens. Retained configs persist
+across Home Assistant restarts; set `discovery_prefix` if your HA instance
+uses a non-default prefix.
 
 ## Data Collection
 
@@ -235,9 +278,11 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Current readings are displayed in the terminal as labeled JSON
 - Errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running
 - Implausible sensor values (e.g. temperature outside -150..200 range) emit a warning log
+- If a fetch parses zero sensors (e.g. the station page format changed), a warning is logged and nothing is inserted for that interval
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
 - When an `[mqtt]` config table is present, each observation is also published to the broker as JSON (failures are logged and never interrupt collection)
+- When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires on the first success afterward - one alert per outage, and webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
 - A metadata file (`<database_stem>_metadata.json`) is generated in [Datasette metadata format](https://docs.datasette.io/en/stable/metadata.html) with human-readable sensor labels, units, and licensing (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
 - Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown
 
@@ -398,7 +443,8 @@ Returns aggregates over a single arbitrary `[start, end)` time window.
 
 ### `GET /health` - Health Check
 
-Returns the daemon health status, last observation timestamp, and row count.
+Returns the daemon health status, last observation timestamp, seconds since
+that observation, and row count.
 
 **Response:**
 
@@ -406,9 +452,17 @@ Returns the daemon health status, last observation timestamp, and row count.
 {
   "status": "ok",
   "last_observation_ts": "2026-03-12 10:30:00",
+  "age_seconds": 42.5,
   "row_count": 10000
 }
 ```
+
+If the most recent observation is older than 180 seconds (the same
+threshold `status` uses for gap detection), `status` becomes `"stale"` and
+the endpoint responds with HTTP `503` - so Docker `HEALTHCHECK`, Kubernetes
+probes, and uptime monitors alert on stalled collection out of the box. An
+empty database reports `"ok"` with `age_seconds: null`, so a freshly
+deployed daemon passes its readiness probe before the first observation.
 
 ### `GET /metrics` - Database Metrics
 
@@ -480,6 +534,7 @@ All errors return JSON with an `error` field:
 | 401    | Missing or wrong bearer token (only when `auth_token` is configured) |
 | 404    | Unknown endpoint |
 | 500    | Server error (e.g. weather station unreachable) |
+| 503    | `/health` only: most recent observation is older than 180 seconds |
 
 ## Development
 

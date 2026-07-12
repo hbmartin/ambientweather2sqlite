@@ -24,6 +24,15 @@ class MqttConfig:
     password: str | None = None
     client_id: str = "aw2sqlite"
     tls: bool = False
+    discovery: bool = False
+    discovery_prefix: str = "homeassistant"
+
+
+@dataclass(frozen=True, slots=True)
+class AlertConfig:
+    webhook_url: str
+    failure_threshold: int = 3
+    timeout_seconds: float = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +44,7 @@ class AppConfig:
     host: str = "localhost"
     auth_token: str | None = None
     mqtt: MqttConfig | None = None
+    alerts: AlertConfig | None = None
 
 
 class LiveDataMetadata(TypedDict):
@@ -65,6 +75,7 @@ class ErrorPayload(TypedDict):
 class HealthPayload(TypedDict):
     status: str
     last_observation_ts: str | None
+    age_seconds: float | None
     row_count: int
 
 

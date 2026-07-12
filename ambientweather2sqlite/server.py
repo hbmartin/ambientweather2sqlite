@@ -3,9 +3,10 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError, MissingTimezoneError
@@ -13,10 +14,11 @@ from ambientweather2sqlite.exceptions import Aw2SqliteError, MissingTimezoneErro
 from . import mureq
 from .awparser import extract_labels, extract_values
 from .database import (
+    DEFAULT_GAP_THRESHOLD_SECONDS,
+    parse_stored_timestamp,
     query_daily_aggregated_data,
     query_db_metrics,
     query_hourly_aggregated_data,
-    query_latest_timestamp,
     query_range_aggregated_data,
 )
 from .database.metrics import query_latest_observation
@@ -132,16 +134,26 @@ def create_request_handler(  # noqa: C901
             labels = extract_labels(body)
             self._send_json(build_live_data_payload(values, labels))
 
-        def _send_query_response(self, build: Callable[[], JsonResponse]) -> None:
-            """Send the built payload, mapping validation errors to 400."""
+        def _send_query_response(
+            self,
+            build: Callable[[], JsonResponse | tuple[JsonResponse, int]],
+        ) -> None:
+            """Send the built payload, mapping validation errors to 400.
+
+            Builders may return a bare payload (sent with 200) or a
+            (payload, status) tuple to control the HTTP status code.
+            """
             try:
-                self._send_json(build())
+                result = build()
             except Aw2SqliteError as e:
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 400)
             except Exception as e:  # noqa: BLE001
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 500)
+            else:
+                payload, status = result if isinstance(result, tuple) else (result, 200)
+                self._send_json(payload, status)
 
         def _send_daily_aggregated_data(self) -> None:
             query: QueryParams = parse_qs(urlparse(self.path).query)
@@ -231,14 +243,36 @@ def create_request_handler(  # noqa: C901
                 ),
             )
 
-        def _build_health_payload(self) -> HealthPayload:
-            latest_ts = query_latest_timestamp(self.DB_PATH)
+        def _build_health_payload(
+            self,
+            now: datetime | None = None,
+        ) -> tuple[HealthPayload, int]:
+            """Build the health payload and its HTTP status code.
+
+            An empty database stays "ok" so a freshly deployed daemon does
+            not fail its readiness probe before the first observation.
+            """
             metrics = query_db_metrics(self.DB_PATH)
-            return {
-                "status": "ok",
+            latest_ts = metrics["latest_ts"]
+            age_seconds: float | None = None
+            stale = False
+            if latest_ts is not None:
+                current_time = now if now is not None else datetime.now(UTC)
+                try:
+                    age_seconds = (
+                        current_time - parse_stored_timestamp(latest_ts)
+                    ).total_seconds()
+                except (ValueError, TypeError):
+                    stale = True
+                else:
+                    stale = age_seconds > DEFAULT_GAP_THRESHOLD_SECONDS
+            payload: HealthPayload = {
+                "status": "stale" if stale else "ok",
                 "last_observation_ts": latest_ts,
+                "age_seconds": age_seconds,
                 "row_count": metrics["row_count"],
             }
+            return payload, 503 if stale else 200
 
         def _send_health(self) -> None:
             self._send_query_response(self._build_health_payload)
@@ -281,25 +315,24 @@ def create_request_handler(  # noqa: C901
             self.send_header("Access-Control-Allow-Headers", "Authorization")
             self.end_headers()
 
+        _ROUTES: ClassVar[dict[str, Callable[..., None]]] = {
+            "/": _send_live_data,
+            "/daily": _send_daily_aggregated_data,
+            "/hourly": _send_hourly_aggregated_data,
+            "/range": _send_range_aggregated_data,
+            "/health": _send_health,
+            "/metrics": _send_metrics,
+        }
+
         def do_GET(self) -> None:
             if not self._is_authorized():
                 self._send_json(build_error_payload("Unauthorized"), 401)
                 return
-            match self.path.split("?")[0]:
-                case "/":
-                    self._send_live_data()
-                case "/daily":
-                    self._send_daily_aggregated_data()
-                case "/hourly":
-                    self._send_hourly_aggregated_data()
-                case "/range":
-                    self._send_range_aggregated_data()
-                case "/health":
-                    self._send_health()
-                case "/metrics":
-                    self._send_metrics()
-                case _:
-                    self._send_json(build_error_payload("Not found"), 404)
+            handler = self._ROUTES.get(self.path.split("?")[0])
+            if handler is None:
+                self._send_json(build_error_payload("Not found"), 404)
+                return
+            handler(self)
 
     JSONHandler.setup_logger()
     return JSONHandler

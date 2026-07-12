@@ -2,7 +2,7 @@ import json
 import socket
 import tempfile
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from http.client import HTTPResponse
 from pathlib import Path
 from typing import Any, cast
@@ -168,12 +168,23 @@ class TestServer(TestCase):
         self.assertIn("error", body)
 
     def test_health_returns_status_and_metrics(self):
+        # The observation seeded in setUp is at noon today, which may be
+        # stale; insert a fresh one so /health deterministically reports ok.
+        insert_observation(
+            self.db_path,
+            {
+                "ts": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "outTemp": 74.0,
+            },
+        )
+
         payload = self._get_json("/health")
 
         self.assertEqual(payload["status"], "ok")
         self.assertIn("last_observation_ts", payload)
+        self.assertIn("age_seconds", payload)
         self.assertIn("row_count", payload)
-        self.assertEqual(payload["row_count"], 1)
+        self.assertEqual(payload["row_count"], 2)
 
     def test_metrics_returns_db_metrics(self):
         payload = self._get_json("/metrics")
@@ -192,12 +203,12 @@ class TestServer(TestCase):
         self.assertEqual(body["error"], "Not found")
 
     def test_response_has_cors_header(self):
-        response = self._get_response("/health")
+        response = self._get_response("/metrics")
         self.assertEqual(response.headers["Access-Control-Allow-Origin"], "*")
         response.close()
 
     def test_response_content_type_is_json(self):
-        response = self._get_response("/health")
+        response = self._get_response("/metrics")
         self.assertEqual(response.headers["Content-type"], "application/json")
         response.close()
 

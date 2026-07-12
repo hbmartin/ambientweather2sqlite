@@ -11,6 +11,7 @@ from ambientweather2sqlite.mqtt import (
     _publish_packet,
     _read_connack,
     publish,
+    publish_message,
 )
 
 
@@ -65,6 +66,11 @@ class TestPacketEncoding(TestCase):
         self.assertEqual(packet[0], 0x30)
         self.assertIn(b"weather/obs", packet)
         self.assertIn(b'{"outTemp": 72.5}', packet)
+
+    def test_publish_packet_sets_retain_flag(self):
+        packet = _publish_packet("t", b"{}", retain=True)
+
+        self.assertEqual(packet[0], 0x31)
 
 
 class _FragmentedSocket:
@@ -148,6 +154,23 @@ class TestPublish(TestCase):
         self.assertEqual(broker.received[0], 0x30)
         self.assertIn(b"weather/obs", broker.received)
         self.assertIn(b'{"outTemp": 72.5}', broker.received)
+        self.assertEqual(broker.received[-2:], bytes([0xE0, 0x00]))
+
+    def test_publish_message_sends_retained_publish_to_topic(self):
+        broker = _FakeBroker()
+        config = MqttConfig(host="127.0.0.1", port=broker.port, topic="weather/obs")
+
+        publish_message(
+            config,
+            "homeassistant/sensor/aw2sqlite/outTemp/config",
+            '{"name": "Outdoor Temperature"}',
+            retain=True,
+        )
+        broker.join()
+
+        self.assertEqual(broker.received[0], 0x31)
+        self.assertIn(b"homeassistant/sensor/aw2sqlite/outTemp/config", broker.received)
+        self.assertNotIn(b"weather/obs", broker.received)
         self.assertEqual(broker.received[-2:], bytes([0xE0, 0x00]))
 
     def test_publish_raises_when_broker_refuses(self):

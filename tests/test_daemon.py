@@ -1,5 +1,7 @@
 import json
 import signal
+import sqlite3
+import sys
 import threading
 from http.client import HTTPException
 from unittest import TestCase
@@ -8,10 +10,12 @@ from unittest.mock import Mock, call, patch
 from ambientweather2sqlite.daemon import (
     _install_sigterm_handler,
     clear_lines,
+    fetch_once,
     next_deadline,
     start_daemon,
     wait_for_next_update,
 )
+from ambientweather2sqlite.models import AlertConfig, MqttConfig
 
 
 class TestDaemonHelpers(TestCase):
@@ -86,6 +90,230 @@ class TestDaemonHelpers(TestCase):
         thread.start()
         thread.join()
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
+
+
+class TestDaemonDiscovery(TestCase):
+    _MQTT_DISCOVERY_CONFIG = MqttConfig(
+        host="127.0.0.1",
+        topic="weather/obs",
+        discovery=True,
+    )
+
+    def _run_daemon(
+        self,
+        mqtt_config,
+        create_metadata_result,
+    ) -> tuple[Mock, Mock]:
+        logger = Mock()
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=create_metadata_result,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.publish_message",
+            ) as mock_publish_message,
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"outTemp": 72.5},
+            ),
+            patch("ambientweather2sqlite.daemon.insert_observation"),
+            patch("ambientweather2sqlite.daemon._publish_observation"),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit):
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    mqtt_config=mqtt_config,
+                )
+        return logger, mock_publish_message
+
+    def test_discovery_publishes_retained_configs_at_startup(self):
+        _logger, mock_publish_message = self._run_daemon(
+            self._MQTT_DISCOVERY_CONFIG,
+            ({"outTemp": "Outdoor Temperature (degF)"}, {"outTemp": "fahrenheit"}),
+        )
+
+        mock_publish_message.assert_called_once()
+        topic = mock_publish_message.call_args.args[1]
+        self.assertEqual(
+            topic,
+            "homeassistant/sensor/aw2sqlite_aw2sqlite/outTemp/config",
+        )
+        self.assertTrue(mock_publish_message.call_args.kwargs["retain"])
+
+    def test_discovery_skipped_when_metadata_empty(self):
+        logger, mock_publish_message = self._run_daemon(
+            self._MQTT_DISCOVERY_CONFIG,
+            ({}, {}),
+        )
+
+        mock_publish_message.assert_not_called()
+        warning_messages = [c.args[0] for c in logger.warning.call_args_list if c.args]
+        self.assertTrue(
+            any("Skipping MQTT discovery" in m for m in warning_messages),
+        )
+
+    def test_discovery_disabled_by_default(self):
+        _logger, mock_publish_message = self._run_daemon(
+            MqttConfig(host="127.0.0.1", topic="weather/obs"),
+            ({"outTemp": "Outdoor Temperature (degF)"}, {"outTemp": "fahrenheit"}),
+        )
+
+        mock_publish_message.assert_not_called()
+
+
+class TestDaemonAlerts(TestCase):
+    def test_start_daemon_counts_failures_in_both_branches(self):
+        alert_config = AlertConfig(webhook_url="http://hooks.local/alert")
+        notifier = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=Mock(),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.AlertNotifier",
+                return_value=notifier,
+            ) as mock_notifier_cls,
+            patch(
+                "ambientweather2sqlite.daemon.mureq.get",
+                side_effect=[
+                    TimeoutError,
+                    HTTPException("live data down"),
+                    KeyboardInterrupt,
+                ],
+            ),
+            patch("ambientweather2sqlite.daemon.wait_for_next_update"),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    alert_config=alert_config,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        mock_notifier_cls.assert_called_once()
+        self.assertIs(mock_notifier_cls.call_args.args[0], alert_config)
+        self.assertEqual(notifier.record_failure.call_count, 2)
+        notifier.record_success.assert_not_called()
+
+    def test_start_daemon_counts_zero_sensor_parse_as_failure(self):
+        notifier = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=Mock(),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.AlertNotifier",
+                return_value=notifier,
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch("ambientweather2sqlite.daemon.extract_values", return_value={}),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    alert_config=AlertConfig(webhook_url="http://hooks.local/alert"),
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        notifier.record_failure.assert_called_once_with()
+        notifier.record_success.assert_not_called()
+
+    def test_start_daemon_records_success_after_fetch(self):
+        notifier = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=Mock(),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.AlertNotifier",
+                return_value=notifier,
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"tempf": 72.5},
+            ),
+            patch("ambientweather2sqlite.daemon.insert_observation"),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    alert_config=AlertConfig(webhook_url="http://hooks.local/alert"),
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        notifier.record_success.assert_called_once_with()
+        notifier.record_failure.assert_not_called()
+
+
+class TestFetchOnce(TestCase):
+    def test_fetch_once_warns_on_zero_sensors(self):
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch("ambientweather2sqlite.daemon.extract_values", return_value={}),
+        ):
+            fetch_once("http://127.0.0.1/livedata.htm")
+
+        warning_calls = [
+            c
+            for c in mock_print.call_args_list
+            if c.args and "parsed 0 sensors" in str(c.args[0])
+        ]
+        self.assertEqual(len(warning_calls), 1)
+        self.assertIs(warning_calls[0].kwargs.get("file"), sys.stderr)
 
 
 class TestStartDaemon(TestCase):
@@ -203,6 +431,101 @@ class TestStartDaemon(TestCase):
         )
         self.assertIn(
             call("Error fetching live data: live data down"),
+            mock_print.call_args_list,
+        )
+
+    def test_start_daemon_survives_insert_errors_and_still_publishes(self):
+        database_path = "/tmp/weather.db"
+        logger = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"tempf": 72.5},
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ) as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon._publish_observation",
+            ) as mock_publish,
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    database_path,
+                    period_seconds=5,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        mock_insert.assert_called_once_with(database_path, {"tempf": 72.5})
+        logger.warning.assert_called_once()
+        self.assertIn(
+            "Failed to insert observation",
+            logger.warning.call_args.args[0],
+        )
+        mock_publish.assert_called_once()
+
+    def test_start_daemon_skips_insert_when_fetch_parses_zero_sensors(self):
+        database_path = "/tmp/weather.db"
+        logger = Mock()
+
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=logger,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={},
+            ),
+            patch("ambientweather2sqlite.daemon.insert_observation") as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon._publish_observation",
+            ) as mock_publish,
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ) as mock_wait,
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    database_path,
+                    period_seconds=5,
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        mock_insert.assert_not_called()
+        mock_publish.assert_not_called()
+        mock_wait.assert_called_once()
+        logger.warning.assert_called_once()
+        self.assertIn("Parsed 0 sensors", logger.warning.call_args.args[0])
+        self.assertIn(
+            call("Warning: parsed 0 sensors from station page"),
             mock_print.call_args_list,
         )
 

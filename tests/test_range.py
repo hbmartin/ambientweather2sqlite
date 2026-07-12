@@ -92,7 +92,8 @@ class TestQueryRangeAggregatedData(TestCase):
 
     def test_end_defaults_to_now(self):
         with patch(
-            "ambientweather2sqlite.database.aggregation.datetime", self._fixed_now(),
+            "ambientweather2sqlite.database.aggregation.datetime",
+            self._fixed_now(),
         ):
             result = query_range_aggregated_data(
                 self.db_path,

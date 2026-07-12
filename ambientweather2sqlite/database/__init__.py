@@ -5,8 +5,11 @@ from .aggregation import (
     query_hourly_aggregated_data,
     query_range_aggregated_data,
 )
+from .backup import backup_database
+from .connection import _parse_stored_timestamp as parse_stored_timestamp
 from .export import export_observations
 from .metrics import (
+    DEFAULT_GAP_THRESHOLD_SECONDS,
     query_db_metrics,
     query_latest_timestamp,
     query_observation_gaps,
@@ -15,9 +18,12 @@ from .schema import create_database_if_not_exists
 from .writes import insert_observation
 
 __all__ = [
+    "DEFAULT_GAP_THRESHOLD_SECONDS",
+    "backup_database",
     "create_database_if_not_exists",
     "export_observations",
     "insert_observation",
+    "parse_stored_timestamp",
     "query_daily_aggregated_data",
     "query_db_metrics",
     "query_hourly_aggregated_data",
