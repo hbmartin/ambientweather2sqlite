@@ -33,7 +33,7 @@ def _load_config_or_exit(config_path: Path) -> AppConfig:
     """Load the config, printing a one-line error instead of a traceback."""
     try:
         return load_config(config_path)
-    except (TypeError, ValueError, tomllib.TOMLDecodeError) as e:
+    except (TypeError, ValueError, OSError, tomllib.TOMLDecodeError) as e:
         print(f"Configuration error in {config_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -117,7 +117,7 @@ def _cmd_backup(args: argparse.Namespace) -> None:
         sys.exit(1)
     try:
         backup_size = backup_database(config.database_path, str(args.destination))
-    except (FileExistsError, sqlite3.Error) as e:
+    except (OSError, sqlite3.Error) as e:
         print(f"Backup failed: {e}", file=sys.stderr)
         sys.exit(1)
     print(f"Backed up {backup_size} bytes to {args.destination}")

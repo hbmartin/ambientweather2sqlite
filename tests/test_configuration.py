@@ -238,6 +238,29 @@ class TestConfiguration(TestCase):
             ):
                 load_config(config_path)
 
+    def test_load_config_rejects_non_positive_timeout_seconds(self):
+        for bad_timeout in (0, -1.5):
+            with (
+                self.subTest(timeout=bad_timeout),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                config_path = Path(temp_dir) / "aw2sqlite.toml"
+                config_path.write_text(
+                    'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                    'database_path = "/tmp/aw2sqlite.db"\n'
+                    "\n"
+                    "[alerts]\n"
+                    'webhook_url = "https://hooks.local/alert"\n'
+                    f"timeout_seconds = {bad_timeout}\n",
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "alerts.timeout_seconds must be greater than 0",
+                ):
+                    load_config(config_path)
+
     def test_load_config_rejects_zero_failure_threshold(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"

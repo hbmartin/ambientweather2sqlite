@@ -219,6 +219,43 @@ class TestDaemonAlerts(TestCase):
         self.assertEqual(notifier.record_failure.call_count, 2)
         notifier.record_success.assert_not_called()
 
+    def test_start_daemon_counts_zero_sensor_parse_as_failure(self):
+        notifier = Mock()
+
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=Mock(),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.AlertNotifier",
+                return_value=notifier,
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch("ambientweather2sqlite.daemon.extract_values", return_value={}),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    alert_config=AlertConfig(webhook_url="http://hooks.local/alert"),
+                )
+
+        self.assertEqual(exc.exception.code, 0)
+        notifier.record_failure.assert_called_once_with()
+        notifier.record_success.assert_not_called()
+
     def test_start_daemon_records_success_after_fetch(self):
         notifier = Mock()
 

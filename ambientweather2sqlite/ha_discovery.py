@@ -95,7 +95,7 @@ def build_discovery_messages(
         unit_category = match_label_unit(label)
         if (
             unit_category is not None
-            and (device_class := UNIT_TO_DEVICE_CLASS[unit_category]) is not None
+            and (device_class := UNIT_TO_DEVICE_CLASS.get(unit_category)) is not None
         ):
             payload["device_class"] = device_class
         topic = f"{config.discovery_prefix}/sensor/{node_id}/{column}/config"

@@ -163,13 +163,17 @@ def _optional_alerts(config_data: dict[str, object]) -> AlertConfig | None:
     if failure_threshold < 1:
         msg = "alerts.failure_threshold must be at least 1"
         raise ValueError(msg)
+    timeout_seconds = _optional_float(alerts_table, "timeout_seconds", default=5.0)
+    if timeout_seconds <= 0:
+        msg = "alerts.timeout_seconds must be greater than 0"
+        raise ValueError(msg)
     return AlertConfig(
         webhook_url=_validate_url(
             _require_str(alerts_table, "webhook_url"),
             "alerts.webhook_url",
         ),
         failure_threshold=failure_threshold,
-        timeout_seconds=_optional_float(alerts_table, "timeout_seconds", default=5.0),
+        timeout_seconds=timeout_seconds,
     )
 
 

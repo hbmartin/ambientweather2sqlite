@@ -196,20 +196,24 @@ def _collect_forever(  # noqa: PLR0913
                 next_deadline(epoch, period_seconds, time.monotonic()),
             )
             continue
-        if notifier is not None:
-            notifier.record_success()
         if not live_data:
+            # An unparseable page means no data is flowing, so it counts
+            # toward the offline alert just like a failed fetch.
             logger.warning(
                 "Parsed 0 sensors from %s - "
                 "the station page format may have changed",
                 live_data_url,
             )
             print("Warning: parsed 0 sensors from station page")
+            if notifier is not None:
+                notifier.record_failure()
             remove_newlines = 1
             wait_for_next_update(
                 next_deadline(epoch, period_seconds, time.monotonic()),
             )
             continue
+        if notifier is not None:
+            notifier.record_success()
         remove_newlines = _print_observation(labels, live_data)
         try:
             insert_observation(database_path, live_data)
