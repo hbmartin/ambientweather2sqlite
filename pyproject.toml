@@ -1,6 +1,6 @@
 [project]
 name = "ambientweather2sqlite"
-version = "0.9.0"
+version = "1.1.0"
 description = "A project to record weather observations from an AmbientWeather station over the local network - no API needed!"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -51,6 +51,7 @@ dev = [
     "pyroma>=5.0.1",
     "ruff>=0.15.5",
     "ty>=0.0.21",
+    "zensical>=0.0.50",
 ]
 
 [tool.coverage.run]
