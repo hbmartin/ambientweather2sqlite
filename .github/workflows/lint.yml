@@ -40,12 +40,30 @@ jobs:
         run: |
           uv run ruff check ambientweather2sqlite
 
+      - name: Run Ruff format check
+        run: |
+          uv run ruff format --check ambientweather2sqlite tests
+
       - name: Run Pyrefly check
         run: |
           uv run pyrefly check ambientweather2sqlite
+
       - name: Run ty check
         run: |
           uv run ty check ambientweather2sqlite
+
+      - name: Check package metadata with Pyroma
+        run: |
+          uv run pyroma .
+
+      - name: Check dependencies with Deptry
+        run: |
+          uv run deptry ambientweather2sqlite
+
+      - name: Check complexity and duplication with Lizard
+        run: |
+          uv run lizard -Eduplicate ambientweather2sqlite
+
       - name: Run tests
         run: |
           uv run pytest tests/ --cov=ambientweather2sqlite --cov-report=xml

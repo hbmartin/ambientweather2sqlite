@@ -554,6 +554,15 @@ All errors return JSON with an `error` field:
 
 Pull requests and issue reports are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
+Project-specific Semgrep rules protect the backup, Home Assistant discovery,
+and health-metric invariants that generic Python linters cannot express. Run
+the production scan and its rule fixtures with:
+
+```shell
+uvx --from semgrep==1.169.0 semgrep scan --metrics=off --error --config semgrep/ambientweather2sqlite.yml ambientweather2sqlite
+uvx --from semgrep==1.169.0 semgrep --metrics=off --test semgrep/
+```
+
 ### Core Architecture
 <img src="media/arch.svg" />
 
