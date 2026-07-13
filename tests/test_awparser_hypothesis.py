@@ -18,9 +18,7 @@ def _make_disabled_input(name: str, value: str) -> str:
 
 def _make_labeled_row(label: str, name: str, value: str) -> str:
     return (
-        f"<tr><td>{escape(label)}</td><td>"
-        f"{_make_disabled_input(name, value)}"
-        f"</td></tr>"
+        f"<tr><td>{escape(label)}</td><td>{_make_disabled_input(name, value)}</td></tr>"
     )
 
 

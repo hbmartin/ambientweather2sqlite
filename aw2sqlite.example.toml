@@ -1,0 +1,2 @@
+live_data_url = "http://192.168.0.99/livedata.htm"
+database_path = "/Users/haroldmartin/Downloads/ambientweather2sqlite/aw2sqlite.db"

@@ -52,8 +52,7 @@ def build_prometheus_metrics(
             )
 
         sensor_lines = [
-            f'{_PREFIX}_sensor_value{{sensor="{_escape_label_value(column)}"}} '
-            f"{value}"
+            f'{_PREFIX}_sensor_value{{sensor="{_escape_label_value(column)}"}} {value}'
             for column, value in latest_observation.items()
             if column != _TS_COL and isinstance(value, int | float)
         ]

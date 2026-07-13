@@ -288,8 +288,7 @@ def _collect_forever(  # noqa: PLR0913
             # An unparseable page means no data is flowing, so it counts
             # toward the offline alert just like a failed fetch.
             logger.warning(
-                "Parsed 0 sensors from %s - "
-                "the station page format may have changed",
+                "Parsed 0 sensors from %s - the station page format may have changed",
                 live_data_url,
             )
             remove_newlines = _status(

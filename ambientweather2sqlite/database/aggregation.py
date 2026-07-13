@@ -402,7 +402,7 @@ def query_daily_aggregated_data(
 
     query = f"""
     SELECT
-        {','.join(select_parts)}
+        {",".join(select_parts)}
     FROM {table_name}
     WHERE {date_filter_expr} >= DATE('now', '{timezone}', '-{prior_days} days')
     GROUP BY {date_filter_expr}
@@ -472,7 +472,7 @@ def query_hourly_aggregated_data(
 
     query = f"""
     SELECT
-        {','.join(select_parts)}
+        {",".join(select_parts)}
     FROM {table_name}
     {where_clause}
     GROUP BY {group_by_expr}
