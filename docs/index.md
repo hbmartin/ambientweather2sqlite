@@ -55,6 +55,7 @@ curl -LsSf uvx.sh/ambientweather2sqlite/install.sh | sh
 <div class="grid cards" markdown>
 
 - :material-api: **[HTTP JSON API](api.md)** - live readings, daily/hourly/range aggregation, health, and Prometheus metrics.
+- :material-database: **[Database Design](database.md)** - schema, timestamps, dynamic columns, migrations, concurrency, and backups.
 - :material-book-open-variant: **[Recipes](recipes.md)** - Datasette, Grafana, Home Assistant, uptime monitoring, and backups.
 - :material-code-braces: **[Development](development.md)** - project setup, checks, and architecture.
 
