@@ -1,36 +1,56 @@
 # AmbientWeather to SQLite
 
 [![PyPI](https://img.shields.io/pypi/v/ambientweather2sqlite.svg)](https://pypi.org/project/ambientweather2sqlite/)
+[![Python](https://img.shields.io/pypi/pyversions/ambientweather2sqlite.svg)](https://pypi.org/project/ambientweather2sqlite/)
+[![License](https://img.shields.io/pypi/l/ambientweather2sqlite.svg)](LICENSE.md)
 [![Lint](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml/badge.svg)](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![codecov](https://codecov.io/gh/hbmartin/ambientweather2sqlite/graph/badge.svg?token=3gZI67ci1N)](https://codecov.io/gh/hbmartin/ambientweather2sqlite)
 [![Checked with pyrefly](https://img.shields.io/badge/🪲-pyrefly-fe8801.svg)](https://pyrefly.org/)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hbmartin/ambientweather2sqlite)
 
-A project to record minute-by-minute weather observations from an AmbientWeather station over the local network - no API needed!
+Record minute-by-minute weather observations from an AmbientWeather station over your local network - no cloud account, no API key, no dependencies.
 
-## Key Features
+## Quick Start
 
-* **Local Network Operation:** Direct connection to weather stations without external API dependencies
-* **Auto-Discovery:** Network scanner to automatically find weather stations on your subnet
-* **Continuous Data Collection:** Automated daemon process collecting data at 60-second intervals
-* **Dynamic Schema Management:** Automatic database schema evolution as new sensors are detected
-* **Observation Deduplication:** UNIQUE index on timestamps prevents duplicate rows on daemon restart
-* **Data Validation:** Warning logs emitted for implausible sensor readings (e.g. temperature of 999)
-* **HTTP JSON API:** Optional web server with live data, aggregation, health check, and metrics endpoints
-* **Datasette Compatible:** Metadata JSON follows the Datasette metadata format with labels, units, and licensing
-* **Structured Logging:** Optional JSONL log format for log aggregator ingestion
-* **Interactive Configuration:** Command-line setup wizard with optional network auto-scan
-* **Gap Detection:** `status` reports periods with missing observations, including ongoing outages
-* **Data Export:** Dump observations as CSV or JSON, with optional time bounds
-* **Prometheus Metrics:** `/metrics` serves the Prometheus text format for Grafana dashboards
-* **MQTT Publishing:** Optional per-observation publish to an MQTT broker (e.g. Home Assistant)
-* **Home Assistant Discovery:** Optional retained MQTT discovery configs so sensors auto-appear in HA with correct units
-* **Webhook Alerts:** Optional webhook notification when the station goes offline or recovers
-* **API Authentication:** Optional bearer token and configurable bind address for the HTTP server
-* **macOS & Linux Services:** Generate launchd plists or systemd user units for running as a background daemon
-* **Docker Support:** Dockerfile and compose example included
+```bash
+uvx ambientweather2sqlite config   # scan the network, find your station, write a config
+uvx ambientweather2sqlite serve    # collect every 60s into SQLite, serve the JSON API
+```
+
+The wizard scans your subnet for the station, so for most setups those two commands are all there is to it. To check that the station is reachable without touching the database:
+
+```bash
+uvx ambientweather2sqlite once     # print one live observation as JSON
+```
+
+Requires Python 3.13+. **[Full documentation →](https://hbmartin.github.io/ambientweather2sqlite/)**
+
+## Contents
+
+- [Why this exists](#why-this-exists)
+- [Features](#features)
+- [Installation](#installation)
+- [CLI](#cli)
+- [Configuration](#configuration)
+- [Data Collection](#data-collection)
+- [HTTP JSON API](#http-json-api)
+- [Recipes](#recipes)
+- [Development](#development)
+- [Legal](#legal)
+
+## Why this exists
+
+Your station already serves its readings on your own network. This reads them straight off the device, so collection keeps working when the vendor's cloud is down, nothing is rate-limited, no account is involved, and your data never leaves the house.
+
+## Features
+
+* **Local Network Operation:** Talks directly to the station's `livedata.htm` - no cloud API, no API key, no account
 * **Zero Dependencies:** Pure Python with no (potentially) untrusted 3rd parties
+* **Auto-Discovery:** The setup wizard scans your subnet and finds the station for you
+* **A Database That Keeps Up With Your Hardware:** Sensor columns are added automatically as new readings appear, timestamps are deduplicated across restarts, and implausible values are flagged
+* **Plugs Into What You Already Run:** Home Assistant (MQTT discovery), Prometheus and Grafana (`/metrics`), and Datasette (generated metadata) - see [Recipes](docs/recipes.md)
+* **Runs As A Service:** Docker, launchd, and systemd units included, with an [HTTP JSON API](docs/api.md) for live and aggregated data
 
 ## Installation
 
@@ -223,7 +243,7 @@ aw2sqlite install-systemd [--config CONFIG_PATH]
 
 Generates a systemd user unit at `~/.config/systemd/user/ambientweather2sqlite.service` and prints `systemctl --user` instructions to enable/disable the service. Use `loginctl enable-linger $USER` to keep it running after logout.
 
-## Setup
+## Configuration
 
 On the first run, if no config file is found, you will be guided through an interactive setup wizard that prompts for:
 
@@ -308,266 +328,33 @@ SQLite is configured with WAL journal mode, normal synchronous writes, in-memory
 
 ## HTTP JSON API
 
-When a port is configured, the daemon starts an HTTP server in a background thread with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`.
+When a port is configured, the daemon starts an HTTP server in a background thread with CORS enabled. It binds to `localhost` by default; set `host` (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.
 
-The server binds to `localhost` by default; set `host` in the config (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Current readings fetched live from the station, with human-readable labels |
+| `GET /daily` | Aggregates grouped by date |
+| `GET /hourly` | Aggregates grouped by date and hour, 24 slots per day |
+| `GET /range` | Aggregates over an arbitrary `[start, end)` window |
+| `GET /health` | Health check; returns `503` once collection has stalled |
+| `GET /metrics` | Database metrics as JSON, or Prometheus text for a scraper |
 
-### `GET /` - Live Data
+**→ [Full API reference](docs/api.md)** - query parameters, response bodies, aggregation fields, timezone formats, and error codes.
 
-Returns current sensor readings fetched directly from the weather station, along with human-readable labels.
+## Recipes
 
-**Response:**
-
-```json
-{
-  "data": {
-    "outTemp": 75.5,
-    "outHumi": 60.0,
-    "windspeed": 3.2,
-    "gustspeed": 8.1,
-    "eventrain": 0.0
-  },
-  "metadata": {
-    "labels": {
-      "outTemp": "Outside Temperature",
-      "outHumi": "Outside Humidity",
-      "windspeed": "Wind Speed",
-      "gustspeed": "Gust Speed",
-      "eventrain": "Event Rain"
-    }
-  }
-}
-```
-
-### `GET /daily` - Daily Aggregated Data
-
-Returns aggregated sensor data grouped by date.
-
-**Query Parameters:**
-
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `tz`      | Yes      | -       | Timezone (see [Timezone Support](#timezone-support)) |
-| `q`       | Yes      | -       | Aggregation field(s), repeatable (see [Aggregation Fields](#aggregation-fields)) |
-| `days`    | No       | `7`     | Number of prior days to include |
-
-**Examples:**
-
-```text
-/daily?tz=America/New_York&q=avg_outHumi&days=7
-/daily?tz=Europe/London&q=min_outTemp&q=sum_eventrain
-```
-
-**Response:**
-
-```json
-{
-  "data": [
-    {
-      "date": "2025-06-26",
-      "avg_outHumi": 62.3,
-      "count": 1440
-    },
-    {
-      "date": "2025-06-27",
-      "avg_outHumi": 58.5,
-      "count": 1440
-    }
-  ]
-}
-```
-
-### `GET /hourly` - Hourly Aggregated Data
-
-Returns aggregated sensor data grouped by date and hour. Each date contains exactly 24 slots (indices 0-23), with `null` for hours that have no data.
-
-**Query Parameters:**
-
-| Parameter    | Required | Default | Description |
-|--------------|----------|---------|-------------|
-| `tz`         | Yes      | -       | Timezone (see [Timezone Support](#timezone-support)) |
-| `q`          | Yes      | -       | Aggregation field(s), repeatable (see [Aggregation Fields](#aggregation-fields)) |
-| `start_date` | Yes      | -       | Start date in `YYYY-MM-DD` format |
-| `end_date`   | No       | today   | End date in `YYYY-MM-DD` format |
-| `date`       | -        | -       | Backward-compatible alias for `start_date` |
-
-**Examples:**
-
-```text
-/hourly?start_date=2025-06-27&tz=America/Chicago&q=avg_outHumi
-/hourly?start_date=2025-06-26&end_date=2025-06-27&tz=%2B05%3A30&q=max_gustspeed
-/hourly?date=2025-06-27&tz=UTC&q=avg_outHumi
-```
-
-**Response (truncated for brevity):**
-
-```json
-{
-  "data": {
-    "2025-06-27": [
-      {
-        "date": "2025-06-27",
-        "hour": "00",
-        "avg_outHumi": 72.1,
-        "count": 60
-      },
-      null,
-      null
-    ]
-  }
-}
-```
-
-The actual array always contains 24 entries, one per hour.
-
-### `GET /range` - Arbitrary Range Aggregation
-
-Returns aggregates over a single arbitrary `[start, end)` time window.
-
-**Query Parameters:**
-
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `tz`      | Yes      | -       | Timezone used to interpret `start`/`end` (see [Timezone Support](#timezone-support)) |
-| `q`       | Yes      | -       | Aggregation field(s), repeatable (see [Aggregation Fields](#aggregation-fields)) |
-| `start`   | Yes      | -       | Window start: ISO date (`2026-06-22`) or datetime (`2026-06-22 06:00:00`) |
-| `end`     | No       | now     | Window end (exclusive), same formats as `start` |
-
-**Example:**
-
-```text
-/range?tz=America/New_York&q=avg_outTemp&q=max_gustspeed&start=2026-06-22&end=2026-06-29
-```
-
-**Response:**
-
-```json
-{
-  "data": {
-    "start": "2026-06-22 04:00:00",
-    "end": "2026-06-29 04:00:00",
-    "avg_outTemp": 71.2,
-    "max_gustspeed": 18.3,
-    "count": 10080
-  }
-}
-```
-
-`start` and `end` in the response are the resolved UTC bounds of the window.
-
-### `GET /health` - Health Check
-
-Returns the daemon health status, last observation timestamp, seconds since
-that observation, and row count.
-
-**Response:**
-
-```json
-{
-  "status": "ok",
-  "last_observation_ts": "2026-03-12 10:30:00",
-  "age_seconds": 42.5,
-  "row_count": 10000
-}
-```
-
-If the most recent observation is older than 180 seconds (the same
-threshold `status` uses for gap detection), `status` becomes `"stale"` and
-the endpoint responds with HTTP `503` - so Docker `HEALTHCHECK`, Kubernetes
-probes, and uptime monitors alert on stalled collection out of the box. An
-empty database reports `"ok"` with `age_seconds: null`, so a freshly
-deployed daemon passes its readiness probe before the first observation.
-
-### `GET /metrics` - Database Metrics
-
-Returns database summary statistics. The default response is JSON:
-
-```json
-{
-  "row_count": 10000,
-  "db_file_size_bytes": 1048576,
-  "earliest_ts": "2025-01-01 00:00:00",
-  "latest_ts": "2026-03-12 10:30:00",
-  "column_count": 25
-}
-```
-
-**Prometheus format:** with `?format=prometheus`, or when the `Accept` header
-asks for `text/plain`/OpenMetrics (as Prometheus scrapers do), the endpoint
-serves the Prometheus text exposition format instead - point a Prometheus
-scrape job at `/metrics` and it works without configuration:
-
-```text
-# HELP aw2sqlite_observations_total Total number of observations recorded.
-# TYPE aw2sqlite_observations_total counter
-aw2sqlite_observations_total 10000
-# HELP aw2sqlite_db_file_size_bytes Size of the SQLite database file.
-# TYPE aw2sqlite_db_file_size_bytes gauge
-aw2sqlite_db_file_size_bytes 1048576
-# HELP aw2sqlite_last_observation_age_seconds Seconds since the most recent observation.
-# TYPE aw2sqlite_last_observation_age_seconds gauge
-aw2sqlite_last_observation_age_seconds 42.5
-# HELP aw2sqlite_sensor_value Latest sensor readings by sensor name.
-# TYPE aw2sqlite_sensor_value gauge
-aw2sqlite_sensor_value{sensor="outTemp"} 72.5
-```
-
-### Aggregation Fields
-
-Aggregation fields use the format `<function>_<column>`, where:
-
-- **Functions:** `avg`, `max`, `min`, `sum` (case-insensitive)
-- **Column:** Any sensor column name in the database (e.g. `outTemp`, `outHumi`, `gustspeed`, `eventrain`)
-
-Multiple fields can be requested by repeating the `q` parameter. A `count` field is always included in the response indicating how many observations were aggregated.
-
-### Timezone Support
-
-The `tz` parameter is required for aggregation endpoints and accepts:
-
-| Format | Example | Description |
-|--------|---------|-------------|
-| IANA timezone name | `America/New_York`, `Europe/London`, `UTC` | Full DST-aware conversion |
-| UTC offset with colon | `+05:30`, `-08:00` | Fixed offset |
-| UTC offset without colon | `+0530`, `-0800` | Fixed offset (HHMM interpreted) |
-| Decimal offset | `+5.5`, `-8.0` | Fixed offset in hours |
-
-URL-encode `+` as `%2B` when needed (e.g. `%2B05%3A30` for `+05:30`).
-
-### Error Responses
-
-All errors return JSON with an `error` field:
-
-```json
-{"error": "description of the error"}
-```
-
-| Status | Cause |
-|--------|-------|
-| 400    | Invalid input: bad timezone, date format, date range, aggregation field, or missing required parameters |
-| 401    | Missing or wrong bearer token (only when `auth_token` is configured) |
-| 404    | Unknown endpoint |
-| 500    | Server error (e.g. weather station unreachable) |
-| 503    | `/health` only: most recent observation is older than 180 seconds |
+Copy-paste configurations for [Datasette](docs/recipes.md#datasette), [Prometheus and Grafana](docs/recipes.md#prometheus-and-grafana), [Home Assistant](docs/recipes.md#home-assistant), [uptime monitoring](docs/recipes.md#uptime-monitoring), [nightly backups](docs/recipes.md#nightly-backups), and [ad-hoc SQL analysis](docs/recipes.md#ad-hoc-analysis).
 
 ## Development
 
 Pull requests and issue reports are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
-Project-specific Semgrep rules protect the backup, Home Assistant discovery,
-and health-metric invariants that generic Python linters cannot express. Run
-the production scan and its rule fixtures with:
-
-```shell
-uvx --from semgrep==1.169.0 semgrep scan --metrics=off --error --config semgrep/ambientweather2sqlite.yml ambientweather2sqlite
-uvx --from semgrep==1.169.0 semgrep --metrics=off --test semgrep/
+```bash
+uv sync --dev
+uv run pytest tests/ --cov=ambientweather2sqlite
 ```
 
-### Core Architecture
-<img src="media/arch.svg" />
-
-### Control Flow
-<img src="media/flow.svg" />
+**→ [Development guide](docs/development.md)** - the full check suite, Semgrep rules, project conventions, and architecture diagrams.
 
 ## Legal
 
