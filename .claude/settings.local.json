@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run black ."
+            "command": "uv run ruff format ambientweather2sqlite tests"
           }
         ]
       }
