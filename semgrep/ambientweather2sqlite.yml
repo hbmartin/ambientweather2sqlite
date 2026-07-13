@@ -1,0 +1,67 @@
+rules:
+  - id: ambientweather2sqlite.non-atomic-vacuum-destination
+    languages: [python]
+    severity: HIGH
+    message: >-
+      Do not check whether the backup destination exists before VACUUM INTO.
+      Reserve the path atomically, or publish through an invocation-owned
+      temporary file, so another process cannot claim the destination.
+    patterns:
+      - pattern: |
+          def backup_database(...):
+            ...
+            if $DEST.exists():
+              ...
+            ...
+            $CONNECTION.execute($SQL, ...)
+            ...
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: '(?i).*VACUUM\s+INTO.*'
+    metadata:
+      category: correctness
+      technology: [python, sqlite]
+
+  - id: ambientweather2sqlite.unscoped-home-assistant-unique-id
+    languages: [python]
+    severity: HIGH
+    message: >-
+      Scope Home Assistant unique_id values with node_id or client_id so
+      separate weather-station instances cannot overwrite each other.
+    patterns:
+      - pattern: |
+          def build_discovery_messages(...):
+            ...
+            $PAYLOAD = { ..., "unique_id": $UNIQUE_ID, ... }
+            ...
+      - metavariable-regex:
+          metavariable: $UNIQUE_ID
+          regex: '^(?!.*(?:node_id|client_id)).*$'
+    metadata:
+      category: correctness
+      technology: [python, home-assistant, mqtt]
+
+  - id: ambientweather2sqlite.split-health-metric-snapshot
+    languages: [python]
+    severity: MEDIUM
+    message: >-
+      Build health data from query_db_metrics alone. A separate latest-timestamp
+      query adds a database round-trip and can describe a different snapshot.
+    pattern-either:
+      - pattern: |
+          def _build_health_payload(...):
+            ...
+            $LATEST = query_latest_timestamp($DATABASE)
+            ...
+            $METRICS = query_db_metrics($DATABASE)
+            ...
+      - pattern: |
+          def _build_health_payload(...):
+            ...
+            $METRICS = query_db_metrics($DATABASE)
+            ...
+            $LATEST = query_latest_timestamp($DATABASE)
+            ...
+    metadata:
+      category: performance
+      technology: [python, sqlite]

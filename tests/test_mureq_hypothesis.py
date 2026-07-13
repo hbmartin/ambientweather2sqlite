@@ -17,8 +17,8 @@ from ambientweather2sqlite import mureq
 
 _QUERY_TEXT = st.text(
     alphabet=st.characters(
-        blacklist_characters="&=+#",
-        blacklist_categories=("Cs",),
+        exclude_characters="&=+#",
+        exclude_categories=("Cs",),
     ),
     max_size=20,
 )
