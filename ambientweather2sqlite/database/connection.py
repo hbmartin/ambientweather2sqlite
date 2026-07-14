@@ -10,7 +10,11 @@ _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _SQLITE_MMAP_SIZE_BYTES = 268_435_456
-_SQLITE_TS_DEFAULT = "STRFTIME('%Y-%m-%d %H:%M:%f', 'now')"
+# SQLite's %f is "SS.SSS": start at the decimal point (position 3) and append
+# three zeros to match the six-digit fractional width used by Python inserts.
+_SQLITE_TS_DEFAULT = (
+    "STRFTIME('%Y-%m-%d %H:%M:%S', 'now') || SUBSTR(STRFTIME('%f', 'now'), 3) || '000'"
+)
 
 
 def _current_observation_timestamp() -> str:

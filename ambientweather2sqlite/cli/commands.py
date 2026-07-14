@@ -3,6 +3,8 @@ import json
 import sqlite3
 import sys
 import tomllib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from ambientweather2sqlite.configuration import (
@@ -15,8 +17,16 @@ from ambientweather2sqlite.database import (
     backup_database,
     create_database_if_not_exists,
     export_observations,
+    inspect_database_migration,
+    migrate_database,
     query_db_metrics,
     query_observation_gaps,
+)
+from ambientweather2sqlite.exceptions import Aw2SqliteError
+from ambientweather2sqlite.metadata import (
+    create_metadata,
+    metadata_path,
+    write_metadata_from_database,
 )
 from ambientweather2sqlite.models import AppConfig
 
@@ -38,10 +48,22 @@ def _load_config_or_exit(config_path: Path) -> AppConfig:
         sys.exit(1)
 
 
+@contextmanager
+def _report_command_errors(action: str | None) -> Iterator[None]:
+    """Print expected command failures without exposing a traceback."""
+    try:
+        yield
+    except (Aw2SqliteError, OSError, sqlite3.Error) as e:
+        message = f"{action} failed: {e}" if action is not None else str(e)
+        print(message, file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_serve(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
     config = _load_config_or_exit(config_path)
-    create_database_if_not_exists(config.database_path)
+    with _report_command_errors(None):
+        create_database_if_not_exists(config.database_path)
     start_daemon(
         live_data_url=config.live_data_url,
         database_path=config.database_path,
@@ -116,12 +138,50 @@ def _cmd_backup(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
     config = _load_config_or_exit(config_path)
     _require_database(config.database_path)
-    try:
+    with _report_command_errors("Backup"):
         backup_size = backup_database(config.database_path, str(args.destination))
-    except (OSError, sqlite3.Error) as e:
-        print(f"Backup failed: {e}", file=sys.stderr)
-        sys.exit(1)
     print(f"Backed up {backup_size} bytes to {args.destination}")
+
+
+def _cmd_migrate(args: argparse.Namespace) -> None:
+    config_path = _resolve_config(args)
+    config = _load_config_or_exit(config_path)
+    _require_database(config.database_path)
+    with _report_command_errors("Migration"):
+        if args.check:
+            plan = inspect_database_migration(config.database_path)
+            print(json.dumps(plan.as_dict(), indent=2))
+            return
+        result = migrate_database(
+            config.database_path,
+            backup_path=str(args.backup) if args.backup is not None else None,
+        )
+        print(json.dumps(result.as_dict(), indent=2))
+
+
+def _cmd_metadata(args: argparse.Namespace) -> None:
+    config_path = _resolve_config(args)
+    config = _load_config_or_exit(config_path)
+    _require_database(config.database_path)
+    with _report_command_errors("Metadata generation"):
+        if args.offline:
+            path = write_metadata_from_database(
+                config.database_path,
+                config.live_data_url,
+            )
+            if path is None:
+                print("Metadata refresh failed", file=sys.stderr)
+                sys.exit(1)
+        else:
+            labels, _ = create_metadata(
+                config.database_path,
+                config.live_data_url,
+            )
+            if not labels:
+                print("Metadata refresh failed", file=sys.stderr)
+                sys.exit(1)
+            path = metadata_path(config.database_path)
+    print(f"Metadata written to {path}")
 
 
 def _cmd_install_launchd(args: argparse.Namespace) -> None:
@@ -140,20 +200,19 @@ def _cmd_install_systemd(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    match args.command:
-        case "serve":
-            _cmd_serve(args)
-        case "config":
-            _cmd_config(args)
-        case "once":
-            _cmd_once(args)
-        case "status":
-            _cmd_status(args)
-        case "export":
-            _cmd_export(args)
-        case "backup":
-            _cmd_backup(args)
-        case "install-launchd":
-            _cmd_install_launchd(args)
-        case "install-systemd":
-            _cmd_install_systemd(args)
+    handlers = {
+        "serve": _cmd_serve,
+        "config": _cmd_config,
+        "once": _cmd_once,
+        "status": _cmd_status,
+        "export": _cmd_export,
+        "backup": _cmd_backup,
+        "migrate": _cmd_migrate,
+        "metadata": _cmd_metadata,
+        "install-launchd": _cmd_install_launchd,
+        "install-systemd": _cmd_install_systemd,
+    }
+    if (handler := handlers.get(args.command)) is None:
+        msg = f"No handler registered for command: {args.command!r}"
+        raise AssertionError(msg)
+    handler(args)

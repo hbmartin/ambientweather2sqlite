@@ -13,16 +13,85 @@ from unittest.mock import Mock, call, patch
 from ambientweather2sqlite.daemon import (
     _configure_logging,
     _install_sigterm_handler,
+    _refresh_metadata,
+    _store_observation,
     clear_lines,
     fetch_once,
     next_deadline,
     start_daemon,
     wait_for_next_update,
 )
+from ambientweather2sqlite.exceptions import InvalidTimestampError
 from ambientweather2sqlite.models import AlertConfig, MqttConfig
 
 
 class TestDaemonHelpers(TestCase):
+    @patch("ambientweather2sqlite.daemon.insert_observation")
+    def test_store_observation_skips_invalid_timestamps(
+        self,
+        mock_insert: Mock,
+    ) -> None:
+        mock_insert.side_effect = InvalidTimestampError("not-a-timestamp")
+        logger = Mock()
+
+        _store_observation(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+            {"ts": "not-a-timestamp", "outTemp": 72.0},
+            {"outTemp": "Outdoor Temperature"},
+            {},
+            logger,
+            None,
+        )
+
+        logger.warning.assert_called_once()
+
+    @patch("ambientweather2sqlite.daemon._refresh_metadata")
+    @patch("ambientweather2sqlite.daemon.insert_observation", return_value=[])
+    def test_store_observation_retries_missing_metadata_periodically(
+        self,
+        mock_insert: Mock,
+        mock_refresh: Mock,
+    ) -> None:
+        for collection_attempt in (1, 9, 10, 11, 20):
+            _store_observation(
+                "weather.db",
+                "http://127.0.0.1/livedata.htm",
+                {"outTemp": 72.0},
+                {},
+                {},
+                Mock(),
+                None,
+                collection_attempt=collection_attempt,
+            )
+
+        self.assertEqual(mock_refresh.call_count, 2)
+        self.assertEqual(mock_insert.call_count, 5)
+
+    @patch("ambientweather2sqlite.daemon._refresh_metadata")
+    @patch(
+        "ambientweather2sqlite.daemon.insert_observation",
+        return_value=["newSensor"],
+    )
+    def test_store_observation_refreshes_immediately_after_schema_change(
+        self,
+        mock_insert: Mock,
+        mock_refresh: Mock,
+    ) -> None:
+        _store_observation(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+            {"newSensor": 1.0},
+            {},
+            {},
+            Mock(),
+            None,
+            collection_attempt=1,
+        )
+
+        mock_refresh.assert_called_once()
+        mock_insert.assert_called_once()
+
     def test_clear_lines_prints_escape_sequence_for_each_line(self):
         with patch("builtins.print") as mock_print:
             clear_lines(3)
@@ -127,6 +196,98 @@ class TestDaemonHelpers(TestCase):
         thread.join()
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
 
+    @patch("ambientweather2sqlite.daemon._publish_discovery")
+    @patch("ambientweather2sqlite.daemon.create_metadata")
+    def test_refresh_metadata_updates_mutable_state_and_discovery(
+        self,
+        mock_create_metadata: Mock,
+        mock_publish_discovery: Mock,
+    ) -> None:
+        mock_create_metadata.return_value = (
+            {"newSensor": "New Sensor"},
+            {"newSensor": "percent"},
+        )
+        labels = {"oldSensor": "Old Sensor"}
+        units = {"oldSensor": "celsius"}
+        logger = Mock()
+        mqtt_config = MqttConfig(host="127.0.0.1", topic="weather/obs")
+
+        refreshed = _refresh_metadata(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+            labels,
+            units,
+            logger,
+            mqtt_config,
+        )
+
+        self.assertTrue(refreshed)
+        self.assertEqual(labels, {"newSensor": "New Sensor"})
+        self.assertEqual(units, {"newSensor": "percent"})
+        mock_publish_discovery.assert_called_once_with(
+            logger,
+            mqtt_config,
+            labels,
+            units,
+        )
+
+    @patch("ambientweather2sqlite.daemon.create_metadata")
+    def test_refresh_metadata_survives_database_errors(
+        self,
+        mock_create_metadata: Mock,
+    ) -> None:
+        for error in (sqlite3.OperationalError("locked"), OSError("disk full")):
+            with self.subTest(error=type(error).__name__):
+                mock_create_metadata.side_effect = error
+                labels = {"oldSensor": "Old Sensor"}
+                units = {"oldSensor": "celsius"}
+                logger = Mock()
+
+                refreshed = _refresh_metadata(
+                    "weather.db",
+                    "http://127.0.0.1/livedata.htm",
+                    labels,
+                    units,
+                    logger,
+                    None,
+                )
+
+                self.assertFalse(refreshed)
+                self.assertEqual(labels, {"oldSensor": "Old Sensor"})
+                self.assertEqual(units, {"oldSensor": "celsius"})
+                logger.info.assert_called_once()
+
+    @patch("ambientweather2sqlite.daemon._publish_discovery")
+    @patch("ambientweather2sqlite.daemon.create_metadata")
+    def test_refresh_metadata_preserves_state_when_labels_are_partial(
+        self,
+        mock_create_metadata: Mock,
+        mock_publish_discovery: Mock,
+    ) -> None:
+        mock_create_metadata.return_value = (
+            {"newSensor": "New Sensor"},
+            {"newSensor": "percent"},
+        )
+        labels = {"oldSensor": "Old Sensor"}
+        units = {"oldSensor": "celsius"}
+        logger = Mock()
+
+        refreshed = _refresh_metadata(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+            labels,
+            units,
+            logger,
+            None,
+            observed_sensor_names={"oldSensor", "newSensor"},
+        )
+
+        self.assertFalse(refreshed)
+        self.assertEqual(labels, {"oldSensor": "Old Sensor"})
+        self.assertEqual(units, {"oldSensor": "celsius"})
+        mock_publish_discovery.assert_not_called()
+        logger.info.assert_called_once()
+
 
 class TestDaemonDiscovery(TestCase):
     _MQTT_DISCOVERY_CONFIG = MqttConfig(
@@ -160,7 +321,10 @@ class TestDaemonDiscovery(TestCase):
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"outTemp": 72.5},
             ),
-            patch("ambientweather2sqlite.daemon.insert_observation"),
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                return_value=[],
+            ),
             patch("ambientweather2sqlite.daemon._publish_observation"),
             patch(
                 "ambientweather2sqlite.daemon.wait_for_next_update",
@@ -315,7 +479,10 @@ class TestDaemonAlerts(TestCase):
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
             ),
-            patch("ambientweather2sqlite.daemon.insert_observation"),
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                return_value=[],
+            ),
             patch(
                 "ambientweather2sqlite.daemon.wait_for_next_update",
                 side_effect=KeyboardInterrupt,
@@ -353,6 +520,35 @@ class TestFetchOnce(TestCase):
 
 
 class TestStartDaemon(TestCase):
+    def test_start_daemon_survives_metadata_database_errors(self) -> None:
+        for error in (sqlite3.OperationalError("locked"), OSError("disk full")):
+            with self.subTest(error=type(error).__name__):
+                logger = Mock()
+                with (
+                    patch("builtins.print"),
+                    patch(
+                        "ambientweather2sqlite.daemon._configure_logging",
+                        return_value=logger,
+                    ),
+                    patch(
+                        "ambientweather2sqlite.daemon.create_metadata",
+                        side_effect=error,
+                    ),
+                    patch("ambientweather2sqlite.daemon._install_sigterm_handler"),
+                    patch(
+                        "ambientweather2sqlite.daemon._collect_forever",
+                        side_effect=KeyboardInterrupt,
+                    ),
+                    self.assertRaises(SystemExit) as exc,
+                ):
+                    start_daemon(
+                        "http://127.0.0.1/livedata.htm",
+                        "/tmp/weather.db",
+                    )
+
+                self.assertEqual(exc.exception.code, 0)
+                logger.info.assert_called_once()
+
     def test_start_daemon_processes_one_update_and_shuts_down_server(self):
         database_path = "/tmp/weather.db"
         server = Mock()
@@ -378,7 +574,10 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
             ),
-            patch("ambientweather2sqlite.daemon.insert_observation") as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                return_value=[],
+            ) as mock_insert,
             patch(
                 "ambientweather2sqlite.daemon.wait_for_next_update",
                 side_effect=KeyboardInterrupt,
@@ -442,7 +641,10 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
             ),
-            patch("ambientweather2sqlite.daemon.insert_observation") as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                return_value=[],
+            ) as mock_insert,
             patch(
                 "ambientweather2sqlite.daemon.wait_for_next_update",
                 side_effect=KeyboardInterrupt,

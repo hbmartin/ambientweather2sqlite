@@ -116,6 +116,8 @@ aw2sqlite <command> [options]
 | `status` | Show database metrics (row count, file size, timestamp range) and observation gaps |
 | `export` | Export observations as CSV or JSON |
 | `backup` | Write a compacted backup copy of the database (safe while the daemon is running) |
+| `migrate` | Inspect or explicitly apply a versioned, automatically backed-up database migration |
+| `metadata` | Refresh the Datasette sidecar, or regenerate it offline from the database |
 | `install-launchd` | Generate a macOS launchd plist for running as a service |
 | `install-systemd` | Generate a systemd user unit for running as a service (Linux) |
 
@@ -213,11 +215,43 @@ aw2sqlite backup DESTINATION [--config CONFIG_PATH]
 Writes a compacted, self-contained copy of the database to `DESTINATION`
 using SQLite's `VACUUM INTO`. This is safe while the daemon is running (a
 raw file copy of a WAL database is not) and the destination must not
-already exist.
+already exist. Sensor-name mappings, labels, and units are stored inside the
+database and are included in the backup.
 
 ```bash
 aw2sqlite backup /backups/aw2sqlite-$(date +%F).db
 ```
+
+### `aw2sqlite migrate`
+
+```bash
+aw2sqlite migrate [--check | --backup PATH] [--config CONFIG_PATH]
+```
+
+Legacy application schemas are never changed as a side effect of `serve`.
+Inspect the plan first, then apply it explicitly:
+
+```bash
+aw2sqlite migrate --check
+aw2sqlite migrate
+```
+
+Applying a migration first creates a timestamped compact backup beside the
+database; `--backup` chooses a different destination. If duplicate legacy
+timestamps must be merged, all source rows are also retained in the
+`aw2sqlite_migration_conflicts` audit table.
+
+### `aw2sqlite metadata`
+
+```bash
+aw2sqlite metadata [--offline] [--config CONFIG_PATH]
+```
+
+Without `--offline`, refreshes labels and units from the station. With
+`--offline`, recreates `<database_stem>_metadata.json` entirely from metadata
+embedded in the database—useful after restoring a backup. If the database has
+no stored sensor metadata, the command exits with status 1 and leaves any
+existing sidecar unchanged.
 
 ### `aw2sqlite install-launchd`
 
@@ -317,12 +351,16 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
 - When an `[mqtt]` config table is present, each observation is also published to the broker as JSON (failures are logged and never interrupt collection)
 - When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires on the first success afterward - one alert per outage, and webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
-- A metadata file (`<database_stem>_metadata.json`) is generated in [Datasette metadata format](https://docs.datasette.io/en/stable/metadata.html) with human-readable sensor labels, units, and licensing (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
+- Sensor-name mappings, labels, and units are persisted in SQLite. The adjacent `<database_stem>_metadata.json` Datasette sidecar is refreshed when new sensor columns appear and can be regenerated offline after a restore (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
 - Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown
 
 ### Database Schema
 
-The `observations` table is created with a single `ts` (TIMESTAMP) column and a UNIQUE index on `ts` for deduplication. Sensor columns are added dynamically as `REAL` columns when new data fields are encountered.
+The `observations` table is created with a `NOT NULL` `ts` (TIMESTAMP) column
+and a UNIQUE index for exact timestamp deduplication. Supplied ISO timestamps
+are normalized to UTC. Sensor columns are added dynamically as `REAL` columns;
+the `aw2sqlite_sensor_columns` table gives every raw station field a stable,
+collision-free physical name and stores its label/unit metadata.
 
 SQLite is configured with WAL journal mode, normal synchronous writes, in-memory temp storage, and 256MB memory-mapped I/O.
 

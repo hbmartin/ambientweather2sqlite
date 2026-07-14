@@ -6,15 +6,20 @@ import logging
 from contextlib import closing
 from typing import TYPE_CHECKING
 
-from ambientweather2sqlite.exceptions import UnexpectedEmptyDictionaryError
+from ambientweather2sqlite.exceptions import (
+    InvalidTimestampError,
+    UnexpectedEmptyDictionaryError,
+)
 
 from .connection import (
     _DEFAULT_TABLE_NAME,
     _TS_COL,
     _connect_database,
     _current_observation_timestamp,
+    _format_sqlite_timestamp,
+    _parse_stored_timestamp,
 )
-from .schema import _column_name, _ensure_columns
+from .identifiers import _ensure_sensor_columns, _quote_identifier
 
 if TYPE_CHECKING:
     import sqlite3
@@ -44,6 +49,13 @@ def _prepare_observation(
     ts_value = prepared.get(_TS_COL)
     if not isinstance(ts_value, str) or not ts_value.strip():
         prepared[_TS_COL] = _current_observation_timestamp()
+    else:
+        try:
+            prepared[_TS_COL] = _format_sqlite_timestamp(
+                _parse_stored_timestamp(ts_value.strip()),
+            )
+        except (ValueError,) as e:
+            raise InvalidTimestampError(ts_value) from e
     return prepared
 
 
@@ -69,6 +81,8 @@ def _insert_dict_row(
     conn: sqlite3.Connection,
     table_name: str,
     data_dict: Observation,
+    *,
+    commit: bool = True,
 ) -> int | None:
     """Alternative version that takes an existing connection.
 
@@ -76,6 +90,7 @@ def _insert_dict_row(
         conn (sqlite3.Connection): Existing database connection
         table_name (str): Name of the table to insert into
         data_dict (dict): Dictionary where keys are column names and values are the data
+        commit: Commit the insert before returning when true.
 
     Returns:
         int: The rowid of the inserted row
@@ -86,17 +101,19 @@ def _insert_dict_row(
 
     cursor = conn.cursor()
 
-    columns = [_column_name(c) for c in list(data_dict.keys())]
+    columns = [_quote_identifier(column) for column in data_dict]
     values = list(data_dict.values())
 
     placeholders = ", ".join(["?" for _ in values])
     columns_str = ", ".join(columns)
 
     query = (
-        f"INSERT OR IGNORE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+        f"INSERT OR IGNORE INTO {_quote_identifier(table_name)} "
+        f"({columns_str}) VALUES ({placeholders})"
     )
     cursor.execute(query, values)
-    conn.commit()
+    if commit:
+        conn.commit()
     if cursor.rowcount <= 0:
         _logger.debug(
             "Ignored insert into %s because the row already exists",
@@ -109,9 +126,26 @@ def _insert_dict_row(
 def insert_observation(
     db_path: str,
     observation: Observation,
-) -> None:
+) -> list[str]:
+    """Insert an observation and return raw sensor names added to the schema."""
     prepared_observation = _prepare_observation(observation)
     _validate_observation(prepared_observation)
     with closing(_connect_database(db_path, read_only=False)) as conn:
-        _ensure_columns(conn, set(prepared_observation.keys()))
-        _insert_dict_row(conn, _DEFAULT_TABLE_NAME, prepared_observation)
+        conn.execute("BEGIN IMMEDIATE")
+        sensor_names = [column for column in prepared_observation if column != _TS_COL]
+        resolved, added_raw_names = _ensure_sensor_columns(conn, sensor_names)
+        physical_observation = {
+            (_TS_COL if raw_name == _TS_COL else resolved[raw_name]): value
+            for raw_name, value in prepared_observation.items()
+        }
+        rowid = _insert_dict_row(
+            conn,
+            _DEFAULT_TABLE_NAME,
+            physical_observation,
+            commit=False,
+        )
+        if rowid is None:
+            conn.rollback()
+            return []
+        conn.commit()
+        return added_raw_names

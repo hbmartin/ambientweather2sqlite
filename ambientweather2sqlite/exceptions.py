@@ -54,3 +54,36 @@ class MissingAggregationFieldsError(Aw2SqliteError):
 class UnexpectedEmptyDictionaryError(Aw2SqliteError):
     def __init__(self):
         super().__init__("Dictionary is unexpectedly empty")
+
+
+class InvalidTimestampError(Aw2SqliteError):
+    def __init__(self, timestamp: str) -> None:
+        super().__init__(
+            f"Invalid timestamp: {timestamp!r}. Expected an ISO 8601 date or datetime",
+        )
+
+
+class MigrationRequiredError(Aw2SqliteError):
+    def __init__(self, current_version: int, target_version: int) -> None:
+        super().__init__(
+            "Database migration required "
+            f"(schema version {current_version} -> {target_version}); "
+            "run 'aw2sqlite migrate --check' and then 'aw2sqlite migrate'",
+        )
+
+
+class UnsupportedSchemaVersionError(Aw2SqliteError):
+    def __init__(self, current_version: int, supported_version: int) -> None:
+        super().__init__(
+            f"Database schema version {current_version} is newer than the "
+            f"supported version {supported_version}; upgrade ambientweather2sqlite",
+        )
+
+
+class NullTimestampMigrationError(Aw2SqliteError):
+    def __init__(self, row_count: int, backup_path: str) -> None:
+        super().__init__(
+            f"Cannot require timestamps while {row_count} observation row(s) have "
+            f"a NULL timestamp; repair the source database and retry. A backup was "
+            f"written to {backup_path}",
+        )

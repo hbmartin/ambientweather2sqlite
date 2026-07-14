@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import closing
 from pathlib import Path
 
 from .connection import _connect_database
+
+
+def _sync_file_and_parent(path: Path) -> None:
+    """Flush a file and its directory entry to durable storage."""
+    with path.open("rb") as backup_file:
+        os.fsync(backup_file.fileno())
+
+    if os.name == "nt":
+        # Windows cannot open a directory with os.open; fsyncing the file still
+        # flushes its data and metadata through FlushFileBuffers.
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(path.parent, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def backup_database(db_path: str, dest_path: str) -> int:
@@ -35,7 +53,8 @@ def backup_database(db_path: str, dest_path: str) -> int:
     try:
         with closing(_connect_database(db_path, read_only=True)) as conn:
             conn.execute("VACUUM INTO ?", (str(destination),))
-    except BaseException:
+        _sync_file_and_parent(destination)
+    except (BaseException,):
         # Remove the reserved/partial file so a retry is not blocked.
         destination.unlink(missing_ok=True)
         raise

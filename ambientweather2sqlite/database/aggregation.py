@@ -26,6 +26,7 @@ from .connection import (
     _format_sqlite_timestamp,
     _parse_stored_timestamp,
 )
+from .identifiers import _quote_identifier
 
 if TYPE_CHECKING:
     import sqlite3
@@ -104,7 +105,7 @@ def _select_parts_from_parsed_fields(
     select_parts = [datetime_expression]
 
     select_parts.extend(
-        f"{agg_func}({column_name}) as {alias}"
+        f"{agg_func}({_quote_identifier(column_name)}) as {_quote_identifier(alias)}"
         for agg_func, column_name, alias in parsed_fields
     )
 
@@ -176,10 +177,14 @@ def _fetch_rows_for_zoneinfo_range(
     end_ts = _format_sqlite_timestamp(
         datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone),
     )
-    select_columns = ", ".join([_TS_COL, *sorted(columns)])
+    select_columns = ", ".join(
+        _quote_identifier(column) for column in [_TS_COL, *sorted(columns)]
+    )
     query = (
-        f"SELECT {select_columns} FROM {_DEFAULT_TABLE_NAME} "
-        f"WHERE {_TS_COL} >= ? AND {_TS_COL} < ? ORDER BY {_TS_COL}"
+        f"SELECT {select_columns} FROM {_quote_identifier(_DEFAULT_TABLE_NAME)} "
+        f"WHERE {_quote_identifier(_TS_COL)} >= ? "
+        f"AND {_quote_identifier(_TS_COL)} < ? "
+        f"ORDER BY {_quote_identifier(_TS_COL)}"
     )
 
     with closing(
@@ -338,15 +343,16 @@ def query_range_aggregated_data(
         raise InvalidDateRangeError(start_ts, end_ts)
 
     select_parts = [
-        f"{agg_func}({column_name}) as {alias}"
+        f"{agg_func}({_quote_identifier(column_name)}) as {_quote_identifier(alias)}"
         for agg_func, column_name, alias in parsed_fields
     ]
     select_parts.append("COUNT(*) as count")
 
     query = (
         f"SELECT {', '.join(select_parts)} "
-        f"FROM {_DEFAULT_TABLE_NAME} "
-        f"WHERE {_TS_COL} >= ? AND {_TS_COL} < ?"
+        f"FROM {_quote_identifier(_DEFAULT_TABLE_NAME)} "
+        f"WHERE {_quote_identifier(_TS_COL)} >= ? "
+        f"AND {_quote_identifier(_TS_COL)} < ?"
     )
 
     with closing(
@@ -392,8 +398,9 @@ def query_daily_aggregated_data(
     table_name: str = _DEFAULT_TABLE_NAME
     date_column: str = _TS_COL
 
-    datetime_expression = f"DATE({date_column}, '{timezone}') as date"
-    date_filter_expr = f"DATE({date_column}, '{timezone}')"
+    quoted_date_column = _quote_identifier(date_column)
+    datetime_expression = f"DATE({quoted_date_column}, '{timezone}') as date"
+    date_filter_expr = f"DATE({quoted_date_column}, '{timezone}')"
 
     select_parts = _select_parts_from_parsed_fields(
         parsed_fields=parsed_fields,
@@ -403,7 +410,7 @@ def query_daily_aggregated_data(
     query = f"""
     SELECT
         {",".join(select_parts)}
-    FROM {table_name}
+    FROM {_quote_identifier(table_name)}
     WHERE {date_filter_expr} >= DATE('now', '{timezone}', '-{prior_days} days')
     GROUP BY {date_filter_expr}
     ORDER BY date
@@ -457,10 +464,11 @@ def query_hourly_aggregated_data(
             timezone=timezone,
         )
 
-    datetime_expression = f"DATE({date_column}, '{timezone}') as date"
-    hour_expression = f"strftime('%H', {date_column}, '{timezone}') as hour"
-    date_filter_expr = f"DATE({date_column}, '{timezone}')"
-    group_by_expr = f"strftime('%Y-%m-%d %H', {date_column}, '{timezone}')"
+    quoted_date_column = _quote_identifier(date_column)
+    datetime_expression = f"DATE({quoted_date_column}, '{timezone}') as date"
+    hour_expression = f"strftime('%H', {quoted_date_column}, '{timezone}') as hour"
+    date_filter_expr = f"DATE({quoted_date_column}, '{timezone}')"
+    group_by_expr = f"strftime('%Y-%m-%d %H', {quoted_date_column}, '{timezone}')"
 
     select_parts = _select_parts_from_parsed_fields(
         parsed_fields=parsed_fields,
@@ -473,7 +481,7 @@ def query_hourly_aggregated_data(
     query = f"""
     SELECT
         {",".join(select_parts)}
-    FROM {table_name}
+    FROM {_quote_identifier(table_name)}
     {where_clause}
     GROUP BY {group_by_expr}
     ORDER BY date, hour

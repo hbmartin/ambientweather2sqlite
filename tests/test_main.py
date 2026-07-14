@@ -1,5 +1,7 @@
 import io
 import json
+import sqlite3
+import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import TestCase
@@ -7,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from ambientweather2sqlite.cli.commands import main
 from ambientweather2sqlite.cli.parser import parse_args
+from ambientweather2sqlite.exceptions import UnsupportedSchemaVersionError
 from ambientweather2sqlite.models import AppConfig
 
 
@@ -63,6 +66,30 @@ class TestParseArgs(TestCase):
         self.assertEqual(args.command, "status")
         self.assertEqual(args.config_path, Path("myconfig.toml"))
 
+    def test_parse_migrate_check_subcommand(self) -> None:
+        args = parse_args(["migrate", "--check"])
+
+        self.assertEqual(args.command, "migrate")
+        self.assertTrue(args.check)
+        self.assertIsNone(args.backup)
+
+    def test_parse_migrate_backup_subcommand(self) -> None:
+        args = parse_args(["migrate", "--backup", "before.db"])
+
+        self.assertEqual(args.command, "migrate")
+        self.assertFalse(args.check)
+        self.assertEqual(args.backup, Path("before.db"))
+
+    def test_parse_migrate_rejects_check_with_backup(self) -> None:
+        with self.assertRaises(SystemExit):
+            parse_args(["migrate", "--check", "--backup", "before.db"])
+
+    def test_parse_metadata_offline_subcommand(self) -> None:
+        args = parse_args(["metadata", "--offline"])
+
+        self.assertEqual(args.command, "metadata")
+        self.assertTrue(args.offline)
+
     def test_parse_install_launchd_subcommand(self):
         args = parse_args(["install-launchd"])
 
@@ -84,6 +111,37 @@ class TestParseArgs(TestCase):
 
 
 class TestMainServe(TestCase):
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.start_daemon")
+    @patch("ambientweather2sqlite.cli.commands.create_database_if_not_exists")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_serve_reports_database_open_errors(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_create_database: Mock,
+        mock_start_daemon: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_create_database.side_effect = sqlite3.OperationalError("locked")
+
+        with self.assertRaises(SystemExit) as exc:
+            main(["serve"])
+
+        self.assertEqual(exc.exception.code, 1)
+        mock_start_daemon.assert_not_called()
+        mock_print.assert_called_once_with("locked", file=sys.stderr)
+
     @patch("ambientweather2sqlite.cli.commands.start_daemon")
     @patch("ambientweather2sqlite.cli.commands.create_database_if_not_exists")
     @patch("ambientweather2sqlite.cli.commands.load_config")
@@ -373,6 +431,306 @@ class TestMainBackup(TestCase):
             main(["backup", "copy.db"])
 
         self.assertEqual(exc.exception.code, 1)
+
+
+class TestMainMigrate(TestCase):
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.inspect_database_migration")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_migrate_check_prints_plan(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_inspect: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_inspect.return_value.as_dict.return_value = {"required": True}
+
+        with patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True):
+            main(["migrate", "--check"])
+
+        mock_inspect.assert_called_once_with("weather.db")
+        mock_print.assert_called_once_with(
+            json.dumps({"required": True}, indent=2),
+        )
+
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.migrate_database")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_migrate_applies_with_requested_backup(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_migrate: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_migrate.return_value.as_dict.return_value = {"schema_version": 1}
+
+        with patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True):
+            main(["migrate", "--backup", "before.db"])
+
+        mock_migrate.assert_called_once_with(
+            "weather.db",
+            backup_path="before.db",
+        )
+        mock_print.assert_called_once_with(
+            json.dumps({"schema_version": 1}, indent=2),
+        )
+
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.migrate_database")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_migrate_applies_with_default_backup(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_migrate: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_migrate.return_value.as_dict.return_value = {"schema_version": 1}
+
+        with patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True):
+            main(["migrate"])
+
+        mock_migrate.assert_called_once_with("weather.db", backup_path=None)
+        mock_print.assert_called_once_with(
+            json.dumps({"schema_version": 1}, indent=2),
+        )
+
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.inspect_database_migration")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_migrate_reports_domain_errors_without_traceback(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_inspect: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_inspect.side_effect = UnsupportedSchemaVersionError(2, 1)
+
+        with (
+            patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True),
+            self.assertRaises(SystemExit) as exc,
+        ):
+            main(["migrate", "--check"])
+
+        self.assertEqual(exc.exception.code, 1)
+        self.assertIn("newer", mock_print.call_args.args[0])
+
+
+class TestMainMetadata(TestCase):
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.metadata_path")
+    @patch(
+        "ambientweather2sqlite.cli.commands.create_metadata",
+        return_value=({"outTemp": "Outdoor Temperature"}, {}),
+    )
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_metadata_refreshes_online(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_create_metadata: Mock,
+        mock_metadata_path: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        sidecar_path = Path("weather_metadata.json")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_metadata_path.return_value = sidecar_path
+
+        with patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True):
+            main(["metadata"])
+
+        mock_create_metadata.assert_called_once_with(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+        )
+        mock_metadata_path.assert_called_once_with("weather.db")
+        mock_print.assert_called_once_with(f"Metadata written to {sidecar_path}")
+
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.create_metadata")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_metadata_reports_domain_errors_without_traceback(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_create_metadata: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_create_metadata.side_effect = UnsupportedSchemaVersionError(2, 1)
+
+        with (
+            patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True),
+            self.assertRaises(SystemExit) as exc,
+        ):
+            main(["metadata"])
+
+        self.assertEqual(exc.exception.code, 1)
+        self.assertIn("Metadata generation failed", mock_print.call_args.args[0])
+
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.write_metadata_from_database")
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_metadata_offline_regenerates_sidecar(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_write_metadata: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        metadata = Path("weather_metadata.json")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+        mock_write_metadata.return_value = metadata
+
+        with patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True):
+            main(["metadata", "--offline"])
+
+        mock_write_metadata.assert_called_once_with(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+        )
+        mock_print.assert_called_once_with(f"Metadata written to {metadata}")
+
+    @patch("builtins.print")
+    @patch(
+        "ambientweather2sqlite.cli.commands.write_metadata_from_database",
+        return_value=None,
+    )
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_metadata_offline_reports_empty_database(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_write_metadata: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+
+        with (
+            patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True),
+            self.assertRaises(SystemExit) as exc,
+        ):
+            main(["metadata", "--offline"])
+
+        self.assertEqual(exc.exception.code, 1)
+        mock_write_metadata.assert_called_once_with(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+        )
+        mock_print.assert_called_once_with("Metadata refresh failed", file=sys.stderr)
+
+    @patch("builtins.print")
+    @patch("ambientweather2sqlite.cli.commands.create_metadata", return_value=({}, {}))
+    @patch("ambientweather2sqlite.cli.commands.load_config")
+    @patch("ambientweather2sqlite.cli.commands.create_config_file")
+    @patch("ambientweather2sqlite.cli.commands.get_config_path")
+    def test_main_metadata_reports_empty_refresh(
+        self,
+        mock_get_config_path: Mock,
+        mock_create_config_file: Mock,
+        mock_load_config: Mock,
+        mock_create_metadata: Mock,
+        mock_print: Mock,
+    ) -> None:
+        config_path = Path("config.toml")
+        mock_get_config_path.return_value = config_path
+        mock_create_config_file.return_value = config_path
+        mock_load_config.return_value = AppConfig(
+            live_data_url="http://127.0.0.1/livedata.htm",
+            database_path="weather.db",
+        )
+
+        with (
+            patch("ambientweather2sqlite.cli.commands.Path.exists", return_value=True),
+            self.assertRaises(SystemExit) as exc,
+        ):
+            main(["metadata"])
+
+        self.assertEqual(exc.exception.code, 1)
+        mock_create_metadata.assert_called_once_with(
+            "weather.db",
+            "http://127.0.0.1/livedata.htm",
+        )
+        mock_print.assert_called_once_with("Metadata refresh failed", file=sys.stderr)
 
 
 class TestMainInstallLaunchd(TestCase):

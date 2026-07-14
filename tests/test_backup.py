@@ -1,8 +1,10 @@
+import os
 import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from ambientweather2sqlite.database import (
     backup_database,
@@ -81,3 +83,27 @@ class TestBackupDatabase(unittest.TestCase):
             backup_database(self.db_path, self.dest_path)
 
         self.assertIn(self.dest_path, str(ctx.exception))
+
+    def test_backup_preserves_sensor_name_mapping(self) -> None:
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-01 00:00:00", "soil-moisture.1": 42.0},
+        )
+
+        backup_database(self.db_path, self.dest_path)
+
+        with closing(sqlite3.connect(self.dest_path)) as conn:
+            mapping = conn.execute(
+                "SELECT raw_name, column_name FROM aw2sqlite_sensor_columns",
+            ).fetchall()
+        self.assertEqual(mapping, [("soil-moisture.1", "soil_moisture_1")])
+
+    @patch("ambientweather2sqlite.database.backup.os.fsync")
+    def test_backup_flushes_file_and_parent_directory(
+        self,
+        mock_fsync: Mock,
+    ) -> None:
+        backup_database(self.db_path, self.dest_path)
+
+        expected_calls = 1 if os.name == "nt" else 2
+        self.assertEqual(mock_fsync.call_count, expected_calls)
