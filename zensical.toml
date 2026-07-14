@@ -11,6 +11,7 @@ Copyright &copy; 2026 Harold Martin - released under GPLv3
 
 nav = [
   { "Home" = "index.md" },
+  { "Database Design" = "database.md" },
   { "HTTP JSON API" = "api.md" },
   { "Recipes" = "recipes.md" },
   { "Development" = "development.md" },

@@ -326,6 +326,8 @@ The `observations` table is created with a single `ts` (TIMESTAMP) column and a 
 
 SQLite is configured with WAL journal mode, normal synchronous writes, in-memory temp storage, and 256MB memory-mapped I/O.
 
+**→ [Full database design reference](docs/database.md)** - schema evolution, timestamp semantics, indexes, migrations, concurrency, backup behavior, and integrity boundaries.
+
 ## HTTP JSON API
 
 When a port is configured, the daemon starts an HTTP server in a background thread with CORS enabled. It binds to `localhost` by default; set `host` (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.

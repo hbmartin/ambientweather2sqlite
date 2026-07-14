@@ -104,7 +104,17 @@ Container healthcheck:
 
 ```yaml
 healthcheck:
-  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+  test:
+    - "CMD"
+    - "python"
+    - "-c"
+    - >-
+      import urllib.request;
+      request = urllib.request.Request(
+        "http://localhost:8080/health",
+        headers={"Authorization": "Bearer s3cret"},
+      );
+      urllib.request.urlopen(request)
   interval: 60s
   timeout: 5s
   retries: 3
@@ -117,9 +127,15 @@ livenessProbe:
   httpGet:
     path: /health
     port: 8080
+    httpHeaders:
+      - name: Authorization
+        value: Bearer s3cret
   initialDelaySeconds: 30
   periodSeconds: 60
 ```
+
+Replace `s3cret` with the configured `auth_token`. If authentication is disabled,
+omit the `Authorization` header from either probe.
 
 An empty database reports `"ok"` with `age_seconds: null`, so a freshly deployed
 daemon passes its readiness probe before the first observation lands.
