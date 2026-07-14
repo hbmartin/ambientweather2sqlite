@@ -7,6 +7,8 @@ from unittest.mock import patch
 from ambientweather2sqlite.database import (
     create_database_if_not_exists,
     insert_observation,
+    query_daily_aggregated_data,
+    query_hourly_aggregated_data,
     query_range_aggregated_data,
 )
 from ambientweather2sqlite.exceptions import (
@@ -152,3 +154,39 @@ class TestQueryRangeAggregatedData(TestCase):
                 start="2026-01-01",
                 tz="2400",
             )
+
+    def test_keyword_sensor_column_is_quoted(self) -> None:
+        insert_observation(
+            self.db_path,
+            {"ts": "2026-01-03 01:00:00", "select": 42.0},
+        )
+
+        for timezone in ("+00:00", "UTC"):
+            with self.subTest(timezone=timezone):
+                result = query_range_aggregated_data(
+                    self.db_path,
+                    ["avg_select"],
+                    start="2026-01-03",
+                    end="2026-01-04",
+                    tz=timezone,
+                )
+
+                self.assertEqual(result["avg_select"], 42.0)
+
+                daily = query_daily_aggregated_data(
+                    self.db_path,
+                    ["avg_select"],
+                    prior_days=10_000,
+                    tz=timezone,
+                )
+                daily_row = next(row for row in daily if row["date"] == "2026-01-03")
+                self.assertEqual(daily_row["avg_select"], 42.0)
+
+                hourly = query_hourly_aggregated_data(
+                    self.db_path,
+                    ["avg_select"],
+                    start_date="2026-01-03",
+                    end_date="2026-01-03",
+                    tz=timezone,
+                )
+                self.assertEqual(hourly["2026-01-03"][1]["avg_select"], 42.0)

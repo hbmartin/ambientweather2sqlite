@@ -144,7 +144,9 @@ daemon passes its readiness probe before the first observation lands.
 
 `aw2sqlite backup` uses SQLite's `VACUUM INTO`, which is safe to run while the
 daemon is writing - a plain file copy of a WAL database is not. The destination
-must not already exist, which makes it a natural fit for a dated filename:
+must not already exist, which makes a dated filename a natural fit. Each backup
+includes observations, the raw-to-physical sensor mapping, and persisted
+labels/units:
 
 ```bash
 aw2sqlite backup /backups/aw2sqlite-$(date +%F).db
@@ -157,6 +159,18 @@ As a cron entry that keeps 30 days of history:
 ```
 
 Note the escaped `\%` - cron treats an unescaped `%` as a newline.
+
+After restoring a backup beside a valid config, regenerate the adjacent
+Datasette sidecar without contacting the station:
+
+```bash
+aw2sqlite metadata --offline
+```
+
+Run `aw2sqlite metadata` without `--offline` when the station is reachable and
+you want to refresh its current labels and units. Offline regeneration exits
+with status 1 and preserves an existing sidecar if the database contains no
+stored sensor metadata.
 
 ## Ad-hoc analysis
 

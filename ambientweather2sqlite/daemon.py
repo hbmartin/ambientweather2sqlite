@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import threading
 import time
+from collections.abc import Iterable
 from datetime import datetime
 from http.client import HTTPException
 from logging.handlers import RotatingFileHandler
@@ -18,15 +19,17 @@ from ambientweather2sqlite.server import Server
 
 from .alerts import AlertNotifier
 from .database import insert_observation
+from .exceptions import InvalidTimestampError
 from .ha_discovery import build_discovery_messages
 from .metadata import create_metadata
-from .models import AlertConfig, ColumnUnitMap, LabelMap, MqttConfig
+from .models import AlertConfig, ColumnUnitMap, LabelMap, MqttConfig, Observation
 from .mqtt import MqttError, publish, publish_message
 
 # Cap the rotating daemon log so it cannot grow without bound on a
 # long-running deployment: up to 4 files of ~5 MB each (~20 MB total).
 _LOG_MAX_BYTES = 5 * 1024 * 1024
 _LOG_BACKUP_COUNT = 3
+_METADATA_RETRY_INTERVAL = 10
 
 
 class _JsonFormatter(logging.Formatter):
@@ -222,6 +225,43 @@ def _publish_discovery(
         logger.warning("MQTT discovery publish failed: %s", e)
 
 
+def _refresh_metadata(  # noqa: PLR0913
+    database_path: str,
+    live_data_url: str,
+    labels: LabelMap,
+    column_to_unit: ColumnUnitMap,
+    logger: logging.Logger,
+    mqtt_config: MqttConfig | None,
+    *,
+    observed_sensor_names: Iterable[str] = (),
+) -> bool:
+    """Refresh persisted metadata and discovery state after schema changes."""
+    try:
+        refreshed_labels, refreshed_units = create_metadata(
+            database_path,
+            live_data_url,
+        )
+    except (HTTPException, TimeoutError, sqlite3.Error, OSError) as e:
+        logger.info("Metadata refresh failed: %s", e)
+        return False
+    if not refreshed_labels:
+        return False
+    unresolved_sensor_names = set(observed_sensor_names) - refreshed_labels.keys()
+    if unresolved_sensor_names:
+        logger.info(
+            "Metadata refresh incomplete; unresolved sensors: %s",
+            ", ".join(sorted(unresolved_sensor_names)),
+        )
+        return False
+
+    labels.clear()
+    labels.update(refreshed_labels)
+    column_to_unit.clear()
+    column_to_unit.update(refreshed_units)
+    _publish_discovery(logger, mqtt_config, labels, column_to_unit)
+    return True
+
+
 def _record_failure_and_wait(
     notifier: AlertNotifier | None,
     epoch: float,
@@ -238,10 +278,49 @@ def _record_failure_and_wait(
     )
 
 
+def _store_observation(  # noqa: PLR0913
+    database_path: str,
+    live_data_url: str,
+    live_data: Observation,
+    labels: LabelMap,
+    column_to_unit: ColumnUnitMap,
+    logger: logging.Logger,
+    mqtt_config: MqttConfig | None,
+    *,
+    collection_attempt: int = 0,
+) -> None:
+    """Store one row and refresh metadata after a successful schema change."""
+    added_sensor_names: list[str] = []
+    try:
+        added_sensor_names = insert_observation(database_path, live_data)
+    except (InvalidTimestampError, sqlite3.Error) as e:
+        logger.warning("Failed to insert observation: %s", e)
+
+    schema_changed = bool(added_sensor_names)
+    observed_sensor_names = {
+        raw_name for raw_name in live_data if raw_name.casefold() != "ts"
+    }
+    metadata_incomplete = not observed_sensor_names.issubset(labels)
+    metadata_retry_due = (
+        metadata_incomplete and collection_attempt % _METADATA_RETRY_INTERVAL == 0
+    )
+    if schema_changed or metadata_retry_due:
+        _refresh_metadata(
+            database_path,
+            live_data_url,
+            labels,
+            column_to_unit,
+            logger,
+            mqtt_config,
+            observed_sensor_names=observed_sensor_names,
+        )
+
+
 def _collect_forever(  # noqa: PLR0913
     live_data_url: str,
     database_path: str,
     labels: LabelMap,
+    column_to_unit: ColumnUnitMap,
     logger: logging.Logger,
     mqtt_config: MqttConfig | None,
     period_seconds: int,
@@ -252,7 +331,9 @@ def _collect_forever(  # noqa: PLR0913
     """Fetch, print, store, and publish observations until interrupted."""
     remove_newlines = 0
     epoch = time.monotonic()
+    collection_attempt = 0
     while True:
+        collection_attempt += 1
         if interactive:
             clear_lines(remove_newlines)
         try:
@@ -309,10 +390,16 @@ def _collect_forever(  # noqa: PLR0913
             live_data,
             interactive=interactive,
         )
-        try:
-            insert_observation(database_path, live_data)
-        except sqlite3.Error as e:
-            logger.warning("Failed to insert observation: %s", e)
+        _store_observation(
+            database_path,
+            live_data_url,
+            live_data,
+            labels,
+            column_to_unit,
+            logger,
+            mqtt_config,
+            collection_attempt=collection_attempt,
+        )
         _publish_observation(logger, mqtt_config, live_data)
         wait_for_next_update(
             next_deadline(epoch, period_seconds, time.monotonic()),
@@ -348,7 +435,7 @@ def start_daemon(  # noqa: PLR0913
     column_to_unit: ColumnUnitMap = {}
     try:
         labels, column_to_unit = create_metadata(database_path, live_data_url)
-    except (HTTPException, TimeoutError) as e:
+    except (HTTPException, TimeoutError, sqlite3.Error, OSError) as e:
         logger.info("%s\n%s", type(e).__name__, e)
         print(f"Error fetching metadata: {e}")
 
@@ -373,6 +460,7 @@ def start_daemon(  # noqa: PLR0913
             live_data_url,
             database_path,
             labels,
+            column_to_unit,
             logger,
             mqtt_config,
             period_seconds,

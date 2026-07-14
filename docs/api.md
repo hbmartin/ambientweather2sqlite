@@ -82,7 +82,9 @@ Returns aggregated sensor data grouped by date.
 
 ## `GET /hourly` - Hourly Aggregated Data
 
-Returns aggregated sensor data grouped by date and hour. Each date contains exactly 24 slots (indices 0-23), with `null` for hours that have no data.
+Returns aggregated sensor data grouped by date and wall-clock hour. Both
+`start_date` and `end_date` are inclusive calendar dates. Each date contains
+exactly 24 slots (indices 0-23), with `null` for hours that have no data.
 
 **Query Parameters:**
 
@@ -91,7 +93,7 @@ Returns aggregated sensor data grouped by date and hour. Each date contains exac
 | `tz`         | Yes      | -       | Timezone (see [Timezone Support](#timezone-support)) |
 | `q`          | Yes      | -       | Aggregation field(s), repeatable (see [Aggregation Fields](#aggregation-fields)) |
 | `start_date` | Yes      | -       | Start date in `YYYY-MM-DD` format |
-| `end_date`   | No       | today   | End date in `YYYY-MM-DD` format |
+| `end_date`   | No       | today   | Inclusive end date in `YYYY-MM-DD` format |
 | `date`       | -        | -       | Backward-compatible alias for `start_date` |
 
 **Examples:**
@@ -121,7 +123,10 @@ Returns aggregated sensor data grouped by date and hour. Each date contains exac
 }
 ```
 
-The actual array always contains 24 entries, one per hour.
+The actual array always contains 24 entries, one per wall-clock hour. On an
+IANA-timezone fall-back day, both physical occurrences of the repeated hour are
+combined in the same slot and its `count` includes both. On a spring-forward
+day, the skipped hour is `null`.
 
 ## `GET /range` - Arbitrary Range Aggregation
 
@@ -224,7 +229,12 @@ See [Recipes](recipes.md#prometheus-and-grafana) for a ready-made scrape job.
 Aggregation fields use the format `<function>_<column>`, where:
 
 - **Functions:** `avg`, `max`, `min`, `sum` (case-insensitive)
-- **Column:** Any sensor column name in the database (e.g. `outTemp`, `outHumi`, `gustspeed`, `eventrain`)
+- **Column:** Any physical sensor column name in the database (e.g. `outTemp`, `outHumi`, `gustspeed`, `eventrain`)
+
+Ordinary station names remain unchanged. For a normalized or collision-encoded
+custom name, find the corresponding physical column name in
+`aw2sqlite_sensor_columns`, an export header, or the generated Datasette
+metadata.
 
 Multiple fields can be requested by repeating the `q` parameter. A `count` field is always included in the response indicating how many observations were aggregated.
 

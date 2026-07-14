@@ -328,6 +328,7 @@ class TestCreateConfigFile(TestCase):
     ):
         mock_detect.side_effect = OSError("offline")
         with tempfile.TemporaryDirectory() as temp_dir:
+            current_path = Path(temp_dir)
             output_path = Path(temp_dir) / "aw2sqlite.toml"
             mock_input.side_effect = [
                 "y",  # Auto-scan
@@ -337,7 +338,11 @@ class TestCreateConfigFile(TestCase):
                 str(output_path),  # Output file
             ]
 
-            result = create_config_file(None)
+            with patch(
+                "ambientweather2sqlite.configuration._CURRENT_PATH",
+                current_path,
+            ):
+                result = create_config_file(None)
 
             content = result.read_text(encoding="utf-8")
             self.assertIn("http://192.168.0.99/livedata.htm", content)

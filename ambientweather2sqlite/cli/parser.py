@@ -11,6 +11,8 @@ _SUBCOMMANDS = {
     "status",
     "export",
     "backup",
+    "migrate",
+    "metadata",
     "install-launchd",
     "install-systemd",
 }
@@ -138,6 +140,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "destination",
         type=Path,
         help="Path for the backup file (must not already exist).",
+    )
+
+    # migrate
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="Inspect or apply a backed-up database migration.",
+    )
+    _add_config_arg(migrate_parser)
+    migrate_mode = migrate_parser.add_mutually_exclusive_group()
+    migrate_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="Print the migration plan without changing the database.",
+    )
+    migrate_mode.add_argument(
+        "--backup",
+        type=Path,
+        help="Pre-migration backup path (default: timestamped beside the database).",
+    )
+
+    # metadata
+    metadata_parser = subparsers.add_parser(
+        "metadata",
+        help="Refresh or regenerate the Datasette metadata sidecar.",
+    )
+    _add_config_arg(metadata_parser)
+    metadata_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "Regenerate from metadata embedded in the database without network access."
+        ),
     )
 
     # install-launchd
