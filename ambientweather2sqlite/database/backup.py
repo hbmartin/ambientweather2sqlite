@@ -18,12 +18,16 @@ def _sync_file_and_parent(path: Path) -> None:
         # Windows cannot open a directory with os.open; fsyncing the file still
         # flushes its data and metadata through FlushFileBuffers.
         return
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    directory_fd = os.open(path.parent, flags)
     try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(path.parent, flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except (OSError,):
+        # Some platforms and filesystems do not support syncing directories.
+        pass
 
 
 def backup_database(db_path: str, dest_path: str) -> int:

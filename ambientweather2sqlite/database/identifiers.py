@@ -61,15 +61,6 @@ def _sensor_mappings(conn: sqlite3.Connection) -> dict[str, tuple[str, str]]:
     }
 
 
-def _mapped_column(conn: sqlite3.Connection, raw_name: str) -> str | None:
-    row = conn.execute(
-        f"SELECT column_name FROM {_quote_identifier(_SENSOR_MAPPING_TABLE)} "
-        "WHERE raw_name = ?",
-        (raw_name,),
-    ).fetchone()
-    return str(row[0]) if row is not None else None
-
-
 def _column_is_available(
     column_name: str,
     raw_name: str,
@@ -89,10 +80,9 @@ def _preferred_column_name(raw_name: str) -> str:
 
 
 def _allocate_column_name(
-    conn: sqlite3.Connection,
     raw_name: str,
+    mappings: dict[str, tuple[str, str]],
 ) -> str:
-    mappings = _sensor_mappings(conn)
     preferred = _preferred_column_name(raw_name)
     if _column_is_available(preferred, raw_name, mappings):
         return preferred
@@ -114,13 +104,15 @@ def _resolve_sensor_names(
     """Resolve raw sensor names to stable, collision-free physical columns."""
     _create_sensor_mapping_table(conn)
     resolved: dict[str, str] = {}
+    mappings = _sensor_mappings(conn)
+    raw_to_column = dict(mappings.values())
     for raw_name in dict.fromkeys(raw_names):
-        if (mapped := _mapped_column(conn, raw_name)) is not None:
+        if (mapped := raw_to_column.get(raw_name)) is not None:
             resolved[raw_name] = mapped
             continue
 
         while True:
-            column_name = _allocate_column_name(conn, raw_name)
+            column_name = _allocate_column_name(raw_name, mappings)
             try:
                 conn.execute(
                     f"INSERT INTO {_quote_identifier(_SENSOR_MAPPING_TABLE)} "
@@ -128,12 +120,16 @@ def _resolve_sensor_names(
                     (raw_name, column_name),
                 )
             except (sqlite3.IntegrityError,):
-                if (mapped := _mapped_column(conn, raw_name)) is not None:
+                mappings = _sensor_mappings(conn)
+                raw_to_column = dict(mappings.values())
+                if (mapped := raw_to_column.get(raw_name)) is not None:
                     column_name = mapped
                     break
-                if column_name.casefold() in _sensor_mappings(conn):
+                if column_name.casefold() in mappings:
                     continue
                 raise
+            mappings[column_name.casefold()] = (raw_name, column_name)
+            raw_to_column[raw_name] = column_name
             break
         resolved[raw_name] = column_name
     return resolved
