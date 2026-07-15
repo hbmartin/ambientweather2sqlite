@@ -107,3 +107,17 @@ class TestBackupDatabase(unittest.TestCase):
 
         expected_calls = 1 if os.name == "nt" else 2
         self.assertEqual(mock_fsync.call_count, expected_calls)
+
+    @unittest.skipIf(os.name == "nt", "Windows does not sync directories")
+    @patch("ambientweather2sqlite.database.backup.os.fsync")
+    def test_backup_ignores_unsupported_directory_sync(
+        self,
+        mock_fsync: Mock,
+    ) -> None:
+        mock_fsync.side_effect = [None, OSError("directory sync unsupported")]
+
+        backup_size = backup_database(self.db_path, self.dest_path)
+
+        self.assertGreater(backup_size, 0)
+        self.assertTrue(Path(self.dest_path).exists())
+        self.assertEqual(mock_fsync.call_count, 2)
