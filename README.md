@@ -48,7 +48,7 @@ Your station already serves its readings on your own network. This reads them st
 * **Local Network Operation:** Talks directly to the station's `livedata.htm` - no cloud API, no API key, no account
 * **Zero Dependencies:** Pure Python with no (potentially) untrusted 3rd parties
 * **Auto-Discovery:** The setup wizard scans your subnet and finds the station for you
-* **A Database That Keeps Up With Your Hardware:** Sensor columns are added automatically as new readings appear, timestamps are deduplicated across restarts, and implausible values are flagged
+* **A Database That Keeps Up With Your Hardware:** Sensor columns are added automatically as new readings appear, timestamps are deduplicated across restarts, stale console pages are skipped so an unchanged reading never becomes a fake per-minute sample, and implausible values are flagged
 * **Plugs Into What You Already Run:** Home Assistant (MQTT discovery), Prometheus and Grafana (`/metrics`), and Datasette (generated metadata) - see [Recipes](docs/recipes.md)
 * **Runs As A Service:** Docker, launchd, and systemd units included, with an [HTTP JSON API](docs/api.md) for live and aggregated data
 
@@ -347,6 +347,7 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running. That log (and the API server's `<database_stem>_server.log`) uses a size-capped rotating handler (5 MB × 4 files) so it cannot grow without bound
 - Implausible sensor values (e.g. temperature outside -150..200 range) emit a warning log
 - If a fetch parses zero sensors (e.g. the station page format changed), a warning is logged and nothing is inserted for that interval
+- Stale console pages are skipped: the station only refreshes its readings every few minutes, so polling more often re-serves an identical page. The daemon detects this using the station's own reported observation time (the `Time`-named field on `livedata.htm`, e.g. `CurrTime`) and skips the write while that time is unchanged; consoles that expose no such field fall back to skipping when every sensor value matches the last stored reading. This prevents a single unchanged reading from being fabricated into many distinct per-minute observations. Because the reported time carries no timezone or seconds it is used only as a change signal - the stored `ts` remains the collector's wall clock. The first poll after a (re)start has no prior reading, so it always inserts
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
 - When an `[mqtt]` config table is present, each observation is also published to the broker as JSON (failures are logged and never interrupt collection)

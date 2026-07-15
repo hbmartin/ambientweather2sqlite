@@ -1,9 +1,11 @@
+import itertools
 import json
 import signal
 import sqlite3
 import sys
 import tempfile
 import threading
+from contextlib import closing
 from http.client import HTTPException
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -11,8 +13,10 @@ from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
 from ambientweather2sqlite.daemon import (
+    _collect_forever,
     _configure_logging,
     _install_sigterm_handler,
+    _is_stale_observation,
     _refresh_metadata,
     _store_observation,
     clear_lines,
@@ -21,6 +25,7 @@ from ambientweather2sqlite.daemon import (
     start_daemon,
     wait_for_next_update,
 )
+from ambientweather2sqlite.database import create_database_if_not_exists
 from ambientweather2sqlite.exceptions import InvalidTimestampError
 from ambientweather2sqlite.models import AlertConfig, MqttConfig
 
@@ -935,3 +940,243 @@ class TestStartDaemon(TestCase):
             call("Error fetching live data: live data down"),
             mock_print.call_args_list,
         )
+
+
+def _livedata_page(station_time: str, out_temp: str = "72.5") -> str:
+    """Build a livedata page carrying a station `CurrTime` and one sensor."""
+    return (
+        "<html><body><table>"
+        "<tr><td>Receiver Time</td><td>"
+        f'<input name="CurrTime" value="{station_time}" disabled></td></tr>'
+        "<tr><td>Outdoor Temperature</td><td>"
+        f'<input name="outTemp" value="{out_temp}" disabled></td></tr>'
+        "</table></body></html>"
+    )
+
+
+def _sensor_only_page(out_temp: str) -> str:
+    """Build a livedata page with no station time (forces value-equality)."""
+    return (
+        "<html><body><table>"
+        "<tr><td>Outdoor Temperature</td><td>"
+        f'<input name="outTemp" value="{out_temp}" disabled></td></tr>'
+        "</table></body></html>"
+    )
+
+
+class TestIsStaleObservation(TestCase):
+    _TIME = "14:47 9/21/2021"
+    _LATER = "14:48 9/21/2021"
+
+    def test_first_poll_is_never_stale(self):
+        # No previous reading exists on the first poll after a (re)start.
+        self.assertFalse(
+            _is_stale_observation(None, self._TIME, None, {"outTemp": 72.5}),
+        )
+
+    def test_unchanged_station_time_is_stale(self):
+        # Station time takes precedence: an unchanged time means a stale page.
+        self.assertTrue(
+            _is_stale_observation(
+                self._TIME,
+                self._TIME,
+                {"outTemp": 72.5},
+                {"outTemp": 99.9},
+            ),
+        )
+
+    def test_advanced_station_time_is_fresh(self):
+        # A newer station time means a genuine reading, even if values match.
+        self.assertFalse(
+            _is_stale_observation(
+                self._TIME,
+                self._LATER,
+                {"outTemp": 72.5},
+                {"outTemp": 72.5},
+            ),
+        )
+
+    def test_identical_values_are_stale_without_station_time(self):
+        self.assertTrue(
+            _is_stale_observation(None, None, {"outTemp": 72.5}, {"outTemp": 72.5}),
+        )
+
+    def test_changed_values_are_fresh_without_station_time(self):
+        self.assertFalse(
+            _is_stale_observation(None, None, {"outTemp": 72.5}, {"outTemp": 73.0}),
+        )
+
+    def test_falls_back_to_values_when_previous_time_missing(self):
+        # A newly appearing station time cannot be compared, so values decide.
+        self.assertTrue(
+            _is_stale_observation(
+                None,
+                self._TIME,
+                {"outTemp": 72.5},
+                {"outTemp": 72.5},
+            ),
+        )
+
+
+class TestCollectForeverStaleDedup(TestCase):
+    """End-to-end stale-page dedup through the real parser and database."""
+
+    def setUp(self):
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+        Path(self.db_path).unlink(missing_ok=True)
+        create_database_if_not_exists(self.db_path)
+        # A monotonic counter guarantees distinct wall-clock timestamps so that
+        # genuinely-new rows are never collapsed by the UNIQUE ts index.
+        self._ts_counter = itertools.count(1)
+
+    def tearDown(self):
+        Path(self.db_path).unlink(missing_ok=True)
+
+    def _next_ts(self) -> str:
+        n = next(self._ts_counter)
+        return f"2026-01-01 00:{n // 60:02d}:{n % 60:02d}.000000"
+
+    def _row_count(self) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            return conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+
+    def _run_cycles(self, bodies: list[str]) -> None:
+        waits: list[object] = [None] * (len(bodies) - 1)
+        waits.append(KeyboardInterrupt)
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.mureq.get", side_effect=bodies),
+            patch("ambientweather2sqlite.daemon._refresh_metadata"),
+            patch(
+                "ambientweather2sqlite.database.writes._current_observation_timestamp",
+                side_effect=self._next_ts,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=waits,
+            ),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            _collect_forever(
+                "http://127.0.0.1/livedata.htm",
+                self.db_path,
+                {},
+                {},
+                Mock(),
+                None,
+                60,
+                interactive=False,
+            )
+
+    def test_identical_stale_pages_store_single_row(self):
+        page = _livedata_page("14:47 9/21/2021")
+        self._run_cycles([page, page, page])
+
+        self.assertEqual(self._row_count(), 1)
+
+    def test_advancing_station_time_stores_new_rows(self):
+        # Identical sensor values, but the station time advances each cycle, so
+        # every page is a genuine observation that must be stored.
+        self._run_cycles(
+            [
+                _livedata_page("14:47 9/21/2021"),
+                _livedata_page("14:48 9/21/2021"),
+            ],
+        )
+
+        self.assertEqual(self._row_count(), 2)
+
+    def test_value_equality_dedup_without_station_time(self):
+        page = _sensor_only_page("72.5")
+        self._run_cycles([page, page])
+
+        self.assertEqual(self._row_count(), 1)
+
+    def test_value_change_without_station_time_stores_new_row(self):
+        self._run_cycles([_sensor_only_page("72.5"), _sensor_only_page("73.0")])
+
+        self.assertEqual(self._row_count(), 2)
+
+    def test_restart_reinserts_first_page(self):
+        page = _livedata_page("14:47 9/21/2021")
+        # First daemon lifetime stores the page once.
+        self._run_cycles([page])
+        self.assertEqual(self._row_count(), 1)
+        # A restart has no in-memory previous state, so the identical page on
+        # the first poll after restart is stored again under a fresh ts.
+        self._run_cycles([page])
+        self.assertEqual(self._row_count(), 2)
+
+
+class TestStartDaemonStaleDedup(TestCase):
+    def _run_two_cycles(
+        self,
+        *,
+        values_side_effect,
+        station_time_side_effect,
+    ) -> tuple[Mock, Mock]:
+        mock_insert = Mock(return_value=[])
+        mock_publish = Mock()
+        with (
+            patch("builtins.print"),
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=Mock(),
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                side_effect=values_side_effect,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.extract_station_time",
+                side_effect=station_time_side_effect,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                mock_insert,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon._publish_observation",
+                mock_publish,
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=[None, KeyboardInterrupt],
+            ),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    "http://127.0.0.1/livedata.htm",
+                    "/tmp/weather.db",
+                    period_seconds=5,
+                    interactive=False,
+                )
+        self.assertEqual(exc.exception.code, 0)
+        return mock_insert, mock_publish
+
+    def test_stale_page_skips_store_and_publish(self):
+        # Two identical pages sharing one station time: only the first is new.
+        mock_insert, mock_publish = self._run_two_cycles(
+            values_side_effect=[{"outTemp": 72.5}, {"outTemp": 72.5}],
+            station_time_side_effect=["14:47 9/21/2021", "14:47 9/21/2021"],
+        )
+
+        mock_insert.assert_called_once_with("/tmp/weather.db", {"outTemp": 72.5})
+        mock_publish.assert_called_once()
+
+    def test_changed_page_stores_each_cycle(self):
+        mock_insert, mock_publish = self._run_two_cycles(
+            values_side_effect=[{"outTemp": 72.5}, {"outTemp": 73.0}],
+            station_time_side_effect=["14:47 9/21/2021", "14:48 9/21/2021"],
+        )
+
+        self.assertEqual(mock_insert.call_count, 2)
+        self.assertEqual(mock_publish.call_count, 2)

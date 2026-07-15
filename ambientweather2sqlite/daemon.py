@@ -14,7 +14,7 @@ from pathlib import Path
 from types import FrameType
 
 from ambientweather2sqlite import mureq
-from ambientweather2sqlite.awparser import extract_values
+from ambientweather2sqlite.awparser import extract_station_time, extract_values
 from ambientweather2sqlite.server import Server
 
 from .alerts import AlertNotifier
@@ -22,7 +22,14 @@ from .database import insert_observation
 from .exceptions import InvalidTimestampError
 from .ha_discovery import build_discovery_messages
 from .metadata import create_metadata
-from .models import AlertConfig, ColumnUnitMap, LabelMap, MqttConfig, Observation
+from .models import (
+    AlertConfig,
+    ColumnUnitMap,
+    LabelMap,
+    LiveData,
+    MqttConfig,
+    Observation,
+)
 from .mqtt import MqttError, publish, publish_message
 
 # Cap the rotating daemon log so it cannot grow without bound on a
@@ -316,6 +323,28 @@ def _store_observation(  # noqa: PLR0913
         )
 
 
+def _is_stale_observation(
+    previous_station_time: str | None,
+    station_time: str | None,
+    previous_live_data: LiveData | None,
+    live_data: LiveData,
+) -> bool:
+    """Return True when a page merely repeats the last stored reading.
+
+    The station's own reported time (e.g. `CurrTime`) advances only when the
+    console refreshes, so an unchanged time marks a stale page whose identical
+    data must not become a fabricated per-minute row. When the console exposes
+    no such time, fall back to comparing every sensor value. The first poll
+    after a (re)start has no previous reading, so the page is treated as fresh
+    and stored normally.
+    """
+    if previous_live_data is None:
+        return False
+    if station_time is not None and previous_station_time is not None:
+        return station_time == previous_station_time
+    return live_data == previous_live_data
+
+
 def _collect_forever(  # noqa: PLR0913
     live_data_url: str,
     database_path: str,
@@ -332,6 +361,8 @@ def _collect_forever(  # noqa: PLR0913
     remove_newlines = 0
     epoch = time.monotonic()
     collection_attempt = 0
+    previous_station_time: str | None = None
+    previous_live_data: LiveData | None = None
     while True:
         collection_attempt += 1
         if interactive:
@@ -385,22 +416,40 @@ def _collect_forever(  # noqa: PLR0913
             continue
         if notifier is not None:
             notifier.record_success()
-        remove_newlines = _emit_observation(
-            labels,
+        station_time = extract_station_time(body)
+        if _is_stale_observation(
+            previous_station_time,
+            station_time,
+            previous_live_data,
             live_data,
-            interactive=interactive,
-        )
-        _store_observation(
-            database_path,
-            live_data_url,
-            live_data,
-            labels,
-            column_to_unit,
-            logger,
-            mqtt_config,
-            collection_attempt=collection_attempt,
-        )
-        _publish_observation(logger, mqtt_config, live_data)
+        ):
+            # The console has not refreshed since the last stored row, so
+            # writing this identical reading would fabricate a distinct
+            # per-minute observation. Skip the write (and republish) entirely.
+            logger.info("Skipping stale page; station reading unchanged")
+            remove_newlines = _status(
+                "Skipping stale (unchanged) observation",
+                interactive=interactive,
+            )
+        else:
+            remove_newlines = _emit_observation(
+                labels,
+                live_data,
+                interactive=interactive,
+            )
+            _store_observation(
+                database_path,
+                live_data_url,
+                live_data,
+                labels,
+                column_to_unit,
+                logger,
+                mqtt_config,
+                collection_attempt=collection_attempt,
+            )
+            _publish_observation(logger, mqtt_config, live_data)
+            previous_station_time = station_time
+            previous_live_data = live_data
         wait_for_next_update(
             next_deadline(epoch, period_seconds, time.monotonic()),
             show_countdown=interactive,
