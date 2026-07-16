@@ -7,6 +7,7 @@ from http.client import HTTPResponse
 from pathlib import Path
 from typing import Any, cast
 from unittest import TestCase
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -211,6 +212,18 @@ class TestServer(TestCase):
         response = self._get_response("/metrics")
         self.assertEqual(response.headers["Content-type"], "application/json")
         response.close()
+
+    def test_update_live_data_url_repoints_live_endpoint(self):
+        new_url = "http://192.168.0.150/livedata.htm"
+        self.server.update_live_data_url(new_url)
+
+        with patch(
+            "ambientweather2sqlite.server.mureq.get",
+            return_value="<html />",
+        ) as mock_get:
+            self._get_json("/")
+
+        mock_get.assert_called_once_with(new_url, auto_retry=True)
 
     def test_live_data_endpoint_returns_error_for_unreachable_url(self):
         status, body = self._get_error_json("/")

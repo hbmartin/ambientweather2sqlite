@@ -27,7 +27,23 @@ from ambientweather2sqlite.daemon import (
 )
 from ambientweather2sqlite.database import create_database_if_not_exists
 from ambientweather2sqlite.exceptions import InvalidTimestampError
-from ambientweather2sqlite.models import AlertConfig, MqttConfig
+from ambientweather2sqlite.models import AlertConfig, MqttConfig, RediscoveryConfig
+
+
+def _patch_rediscovery_network(test: TestCase) -> None:
+    """Keep default-on rediscovery from spawning subprocesses or subnet scans."""
+    test.enterContext(
+        patch(
+            "ambientweather2sqlite.rediscovery.get_mac_address",
+            return_value=None,
+        ),
+    )
+    test.enterContext(
+        patch(
+            "ambientweather2sqlite.rediscovery.find_station_by_mac",
+            return_value=None,
+        ),
+    )
 
 
 class TestDaemonHelpers(TestCase):
@@ -301,6 +317,9 @@ class TestDaemonDiscovery(TestCase):
         discovery=True,
     )
 
+    def setUp(self):
+        _patch_rediscovery_network(self)
+
     def _run_daemon(
         self,
         mqtt_config,
@@ -381,6 +400,9 @@ class TestDaemonDiscovery(TestCase):
 
 
 class TestDaemonAlerts(TestCase):
+    def setUp(self):
+        _patch_rediscovery_network(self)
+
     def test_start_daemon_counts_failures_in_both_branches(self):
         alert_config = AlertConfig(webhook_url="http://hooks.local/alert")
         notifier = Mock()
@@ -506,6 +528,165 @@ class TestDaemonAlerts(TestCase):
         notifier.record_failure.assert_not_called()
 
 
+class TestDaemonRediscovery(TestCase):
+    _OLD_URL = "http://127.0.0.1/livedata.htm"
+    _NEW_URL = "http://192.168.0.150/livedata.htm"
+    _MAC = "aa:bb:cc:dd:ee:ff"
+
+    def _run_daemon(
+        self,
+        *,
+        fetch_side_effect: list[object],
+        wait_side_effect: list[object],
+        find_result: tuple[str, str | None] | None = None,
+        captured_mac: str | None = None,
+        rediscovery_config: RediscoveryConfig | None = None,
+        alert_config: AlertConfig | None = None,
+        port: int | None = None,
+        interactive: bool = True,
+    ) -> dict[str, Mock]:
+        mocks = {
+            "logger": Mock(),
+            "server": Mock(),
+            "notifier": Mock(),
+            "fetch": Mock(side_effect=fetch_side_effect),
+        }
+        with (
+            patch("builtins.print") as mock_print,
+            patch("ambientweather2sqlite.daemon.clear_lines"),
+            patch(
+                "ambientweather2sqlite.daemon._configure_logging",
+                return_value=mocks["logger"],
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.create_metadata",
+                return_value=({}, {}),
+            ),
+            patch("ambientweather2sqlite.daemon.Server", return_value=mocks["server"]),
+            patch(
+                "ambientweather2sqlite.daemon.AlertNotifier",
+                return_value=mocks["notifier"],
+            ),
+            patch("ambientweather2sqlite.daemon.mureq.get", mocks["fetch"]),
+            patch(
+                "ambientweather2sqlite.daemon.extract_values",
+                return_value={"tempf": 72.5},
+            ),
+            patch(
+                "ambientweather2sqlite.daemon.insert_observation",
+                return_value=[],
+            ) as mock_insert,
+            patch(
+                "ambientweather2sqlite.daemon.wait_for_next_update",
+                side_effect=wait_side_effect,
+            ),
+            patch(
+                "ambientweather2sqlite.rediscovery.find_station_by_mac",
+                return_value=find_result,
+            ) as mock_find,
+            patch(
+                "ambientweather2sqlite.rediscovery.get_mac_address",
+                return_value=captured_mac,
+            ) as mock_mac,
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                start_daemon(
+                    self._OLD_URL,
+                    "/tmp/weather.db",
+                    port=port,
+                    period_seconds=5,
+                    alert_config=alert_config,
+                    rediscovery_config=rediscovery_config,
+                    interactive=interactive,
+                )
+        self.assertEqual(exc.exception.code, 0)
+        mocks["find"] = mock_find
+        mocks["mac"] = mock_mac
+        mocks["insert"] = mock_insert
+        mocks["print"] = mock_print
+        return mocks
+
+    def test_relocates_after_threshold_and_polls_new_url(self):
+        mocks = self._run_daemon(
+            fetch_side_effect=[
+                HTTPException("station moved"),
+                HTTPException("station moved"),
+                "<html />",
+            ],
+            wait_side_effect=[None, None, KeyboardInterrupt],
+            find_result=(self._NEW_URL, self._MAC),
+            alert_config=AlertConfig(webhook_url="http://hooks.local/alert"),
+            port=8080,
+        )
+
+        polled_urls = [c.args[0] for c in mocks["fetch"].call_args_list]
+        self.assertEqual(polled_urls, [self._OLD_URL, self._OLD_URL, self._NEW_URL])
+        mocks["find"].assert_called_once()
+        mocks["server"].update_live_data_url.assert_called_once_with(self._NEW_URL)
+        self.assertEqual(mocks["notifier"].station_url, self._NEW_URL)
+        mocks["insert"].assert_called_once_with("/tmp/weather.db", {"tempf": 72.5})
+        warning_args = mocks["logger"].warning.call_args.args
+        self.assertIn("Weather station moved", warning_args[0])
+        self.assertIn(self._OLD_URL, warning_args)
+        self.assertIn(self._NEW_URL, warning_args)
+        self.assertIn(
+            call(f"Station relocated: now polling {self._NEW_URL}"),
+            mocks["print"].call_args_list,
+        )
+
+    def test_relocates_from_the_fast_timeout_retry_branch(self):
+        mocks = self._run_daemon(
+            fetch_side_effect=[TimeoutError, TimeoutError, "<html />"],
+            wait_side_effect=[KeyboardInterrupt],
+            find_result=(self._NEW_URL, self._MAC),
+            interactive=False,
+        )
+
+        polled_urls = [c.args[0] for c in mocks["fetch"].call_args_list]
+        self.assertEqual(polled_urls, [self._OLD_URL, self._OLD_URL, self._NEW_URL])
+
+    def test_disabled_rediscovery_never_scans(self):
+        mocks = self._run_daemon(
+            fetch_side_effect=[
+                HTTPException("station moved"),
+                HTTPException("station moved"),
+                HTTPException("station moved"),
+            ],
+            wait_side_effect=[None, None, KeyboardInterrupt],
+            find_result=(self._NEW_URL, self._MAC),
+            rediscovery_config=RediscoveryConfig(enabled=False),
+        )
+
+        mocks["find"].assert_not_called()
+        polled_urls = [c.args[0] for c in mocks["fetch"].call_args_list]
+        self.assertEqual(polled_urls, [self._OLD_URL] * 3)
+
+    def test_failed_rescan_keeps_polling_the_old_url(self):
+        mocks = self._run_daemon(
+            fetch_side_effect=[
+                HTTPException("station down"),
+                HTTPException("station down"),
+                "<html />",
+            ],
+            wait_side_effect=[None, None, KeyboardInterrupt],
+            find_result=None,
+        )
+
+        mocks["find"].assert_called_once()
+        mocks["server"].update_live_data_url.assert_not_called()
+        polled_urls = [c.args[0] for c in mocks["fetch"].call_args_list]
+        self.assertEqual(polled_urls, [self._OLD_URL] * 3)
+
+    def test_mac_is_captured_once_after_first_success(self):
+        mocks = self._run_daemon(
+            fetch_side_effect=["<html />", "<html />"],
+            wait_side_effect=[None, KeyboardInterrupt],
+            captured_mac=self._MAC,
+        )
+
+        mocks["mac"].assert_called_once_with("127.0.0.1")
+
+
 class TestFetchOnce(TestCase):
     def test_fetch_once_warns_on_zero_sensors(self):
         with (
@@ -525,6 +706,9 @@ class TestFetchOnce(TestCase):
 
 
 class TestStartDaemon(TestCase):
+    def setUp(self):
+        _patch_rediscovery_network(self)
+
     def test_start_daemon_survives_metadata_database_errors(self) -> None:
         for error in (sqlite3.OperationalError("locked"), OSError("disk full")):
             with self.subTest(error=type(error).__name__):
@@ -1124,6 +1308,9 @@ class TestCollectForeverStaleDedup(TestCase):
 
 
 class TestStartDaemonStaleDedup(TestCase):
+    def setUp(self):
+        _patch_rediscovery_network(self)
+
     def _run_two_cycles(
         self,
         *,

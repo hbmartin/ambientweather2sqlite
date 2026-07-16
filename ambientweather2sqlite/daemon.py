@@ -6,7 +6,7 @@ import sqlite3
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from http.client import HTTPException
 from logging.handlers import RotatingFileHandler
@@ -29,8 +29,10 @@ from .models import (
     LiveData,
     MqttConfig,
     Observation,
+    RediscoveryConfig,
 )
 from .mqtt import MqttError, publish, publish_message
+from .rediscovery import StationRediscovery
 
 # Cap the rotating daemon log so it cannot grow without bound on a
 # long-running deployment: up to 4 files of ~5 MB each (~20 MB total).
@@ -269,20 +271,64 @@ def _refresh_metadata(  # noqa: PLR0913
     return True
 
 
-def _record_failure_and_wait(
+def _record_cycle_success(
     notifier: AlertNotifier | None,
+    rediscovery: StationRediscovery | None,
+) -> None:
+    """Reset both failure trackers after a successful fetch."""
+    if notifier is not None:
+        notifier.record_success()
+    if rediscovery is not None:
+        rediscovery.record_success()
+
+
+def _relocate_if_needed(
+    rediscovery: StationRediscovery | None,
+    live_data_url: str,
+    on_url_change: Callable[[str], None] | None,
+    *,
+    interactive: bool,
+) -> tuple[str, int]:
+    """Count a fetch failure and return the (possibly new) URL and status lines."""
+    if rediscovery is None or (new_url := rediscovery.record_failure()) is None:
+        return live_data_url, 0
+    lines = _status(
+        f"Station relocated: now polling {new_url}",
+        interactive=interactive,
+    )
+    if on_url_change is not None:
+        on_url_change(new_url)
+    return new_url, lines
+
+
+def _handle_failed_cycle(  # noqa: PLR0913
+    notifier: AlertNotifier | None,
+    rediscovery: StationRediscovery | None,
+    on_url_change: Callable[[str], None] | None,
+    live_data_url: str,
     epoch: float,
     period_seconds: int,
     *,
     interactive: bool = True,
-) -> None:
-    """Count a failed collection attempt and sleep until the next slot."""
+) -> tuple[str, int]:
+    """Count a failed collection attempt and sleep until the next slot.
+
+    Returns the (possibly relocated) live data URL and the number of extra
+    status lines printed for the interactive redraw.
+    """
     if notifier is not None:
         notifier.record_failure()
+    live_data_url, extra_lines = _relocate_if_needed(
+        rediscovery,
+        live_data_url,
+        on_url_change,
+        interactive=interactive,
+    )
     wait_for_next_update(
         next_deadline(epoch, period_seconds, time.monotonic()),
         show_countdown=interactive,
     )
+    return live_data_url, extra_lines
 
 
 def _store_observation(  # noqa: PLR0913
@@ -358,7 +404,9 @@ def _collect_forever(  # noqa: PLR0913
     mqtt_config: MqttConfig | None,
     period_seconds: int,
     notifier: AlertNotifier | None = None,
+    rediscovery: StationRediscovery | None = None,
     *,
+    on_url_change: Callable[[str], None] | None = None,
     interactive: bool = True,
 ) -> None:
     """Fetch, print, store, and publish observations until interrupted."""
@@ -386,6 +434,13 @@ def _collect_forever(  # noqa: PLR0913
                 )
             if notifier is not None:
                 notifier.record_failure()
+            live_data_url, extra_lines = _relocate_if_needed(
+                rediscovery,
+                live_data_url,
+                on_url_change,
+                interactive=interactive,
+            )
+            remove_newlines += extra_lines
             continue
         except HTTPException as e:
             logger.info("%s\n%s", type(e).__name__, e)
@@ -393,12 +448,16 @@ def _collect_forever(  # noqa: PLR0913
                 f"Error fetching live data: {e}",
                 interactive=interactive,
             )
-            _record_failure_and_wait(
+            live_data_url, extra_lines = _handle_failed_cycle(
                 notifier,
+                rediscovery,
+                on_url_change,
+                live_data_url,
                 epoch,
                 period_seconds,
                 interactive=interactive,
             )
+            remove_newlines += extra_lines
             continue
         if not live_data:
             # An unparseable page means no data is flowing, so it counts
@@ -411,15 +470,18 @@ def _collect_forever(  # noqa: PLR0913
                 "Warning: parsed 0 sensors from station page",
                 interactive=interactive,
             )
-            _record_failure_and_wait(
+            live_data_url, extra_lines = _handle_failed_cycle(
                 notifier,
+                rediscovery,
+                on_url_change,
+                live_data_url,
                 epoch,
                 period_seconds,
                 interactive=interactive,
             )
+            remove_newlines += extra_lines
             continue
-        if notifier is not None:
-            notifier.record_success()
+        _record_cycle_success(notifier, rediscovery)
         station_time = extract_station_time(body)
         if _is_stale_observation(
             previous_station_time,
@@ -471,6 +533,7 @@ def start_daemon(  # noqa: PLR0913
     auth_token: str | None = None,
     mqtt_config: MqttConfig | None = None,
     alert_config: AlertConfig | None = None,
+    rediscovery_config: RediscoveryConfig | None = None,
     interactive: bool | None = None,
 ) -> None:
     # A non-tty stdout (Docker, systemd, launchd, a redirect) can't overwrite
@@ -507,6 +570,20 @@ def start_daemon(  # noqa: PLR0913
         else None
     )
 
+    rediscovery_config = rediscovery_config or RediscoveryConfig()
+    rediscovery = (
+        StationRediscovery(rediscovery_config, live_data_url, logger)
+        if rediscovery_config.enabled
+        else None
+    )
+
+    def _apply_relocated_url(new_url: str) -> None:
+        """Propagate a relocated station URL to the server and notifier."""
+        if server is not None:
+            server.update_live_data_url(new_url)
+        if notifier is not None:
+            notifier.station_url = new_url
+
     _install_sigterm_handler()
     try:
         _collect_forever(
@@ -518,6 +595,8 @@ def start_daemon(  # noqa: PLR0913
             mqtt_config,
             period_seconds,
             notifier,
+            rediscovery,
+            on_url_change=_apply_relocated_url,
             interactive=interactive,
         )
     except KeyboardInterrupt:

@@ -36,6 +36,12 @@ class AlertConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RediscoveryConfig:
+    enabled: bool = True
+    failure_threshold: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     live_data_url: str
     database_path: str
@@ -45,6 +51,7 @@ class AppConfig:
     auth_token: str | None = None
     mqtt: MqttConfig | None = None
     alerts: AlertConfig | None = None
+    rediscovery: RediscoveryConfig = RediscoveryConfig()
 
 
 class LiveDataMetadata(TypedDict):

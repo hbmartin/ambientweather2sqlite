@@ -359,6 +359,7 @@ class Server:
         auth_token: str | None = None,
     ):
         handler_class = create_request_handler(live_data_url, db_path, auth_token)
+        self._handler_class = handler_class
         self._teardown_logger = cast("Any", handler_class).teardown_logger
         self.httpd = HTTPServer(
             (host, port),
@@ -372,6 +373,10 @@ class Server:
     def start(self) -> None:
         """Serve requests on a daemon background thread."""
         self.server_thread.start()
+
+    def update_live_data_url(self, live_data_url: str) -> None:
+        """Point the /live endpoint at a relocated station."""
+        cast("Any", self._handler_class).LIVE_DATA_URL = live_data_url
 
     def shutdown(self) -> None:
         """Stop serving, close the socket, and release the log handler."""
