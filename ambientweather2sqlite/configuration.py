@@ -2,7 +2,7 @@ import tomllib
 from pathlib import Path
 from typing import overload
 
-from .models import AlertConfig, AppConfig, MqttConfig
+from .models import AlertConfig, AppConfig, MqttConfig, RediscoveryConfig
 
 _CURRENT_PATH = Path.cwd()
 _DEFAULT_CONFIG_NAME = "aw2sqlite.toml"
@@ -122,15 +122,17 @@ def _validate_port(value: int | None, key: str) -> int | None:
     return value
 
 
+def _require_table(value: object, key: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise _config_type_error(key, "a table")
+    return {str(table_key): table_value for table_key, table_value in value.items()}
+
+
 def _optional_mqtt(config_data: dict[str, object]) -> MqttConfig | None:
     mqtt_data = config_data.get("mqtt")
     if mqtt_data is None:
         return None
-    if not isinstance(mqtt_data, dict):
-        raise _config_type_error("mqtt", "a table")
-    mqtt_table: dict[str, object] = {
-        str(key): value for key, value in mqtt_data.items()
-    }
+    mqtt_table = _require_table(mqtt_data, "mqtt")
     mqtt_port = _optional_int(mqtt_table, "port", default=1883)
     _validate_port(mqtt_port, "mqtt.port")
     return MqttConfig(
@@ -154,11 +156,7 @@ def _optional_alerts(config_data: dict[str, object]) -> AlertConfig | None:
     alerts_data = config_data.get("alerts")
     if alerts_data is None:
         return None
-    if not isinstance(alerts_data, dict):
-        raise _config_type_error("alerts", "a table")
-    alerts_table: dict[str, object] = {
-        str(key): value for key, value in alerts_data.items()
-    }
+    alerts_table = _require_table(alerts_data, "alerts")
     failure_threshold = _optional_int(alerts_table, "failure_threshold", default=3)
     if failure_threshold < 1:
         msg = "alerts.failure_threshold must be at least 1"
@@ -177,6 +175,21 @@ def _optional_alerts(config_data: dict[str, object]) -> AlertConfig | None:
     )
 
 
+def _optional_rediscovery(config_data: dict[str, object]) -> RediscoveryConfig:
+    rediscovery_data = config_data.get("rediscovery")
+    if rediscovery_data is None:
+        return RediscoveryConfig()
+    rediscovery_table = _require_table(rediscovery_data, "rediscovery")
+    failure_threshold = _optional_int(rediscovery_table, "failure_threshold", default=2)
+    if failure_threshold < 1:
+        msg = "rediscovery.failure_threshold must be at least 1"
+        raise ValueError(msg)
+    return RediscoveryConfig(
+        enabled=_optional_bool(rediscovery_table, "enabled", default=True),
+        failure_threshold=failure_threshold,
+    )
+
+
 def load_config(config_path: Path) -> AppConfig:
     config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     return AppConfig(
@@ -191,6 +204,7 @@ def load_config(config_path: Path) -> AppConfig:
         auth_token=_optional_str_or_none(config_data, "auth_token"),
         mqtt=_optional_mqtt(config_data),
         alerts=_optional_alerts(config_data),
+        rediscovery=_optional_rediscovery(config_data),
     )
 
 

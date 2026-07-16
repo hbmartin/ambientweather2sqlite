@@ -280,6 +280,84 @@ class TestConfiguration(TestCase):
             ):
                 load_config(config_path)
 
+    def test_load_config_defaults_rediscovery_when_table_absent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertTrue(config.rediscovery.enabled)
+        self.assertEqual(config.rediscovery.failure_threshold, 2)
+
+    def test_load_config_parses_rediscovery_table(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[rediscovery]\n"
+                "enabled = false\n"
+                "failure_threshold = 5\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertFalse(config.rediscovery.enabled)
+        self.assertEqual(config.rediscovery.failure_threshold, 5)
+
+    def test_load_config_rejects_zero_rediscovery_failure_threshold(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[rediscovery]\n"
+                "failure_threshold = 0\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "rediscovery.failure_threshold must be at least 1",
+            ):
+                load_config(config_path)
+
+    def test_load_config_rejects_non_bool_rediscovery_enabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                "\n"
+                "[rediscovery]\n"
+                'enabled = "yes"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TypeError, "enabled must be a boolean"):
+                load_config(config_path)
+
+    def test_load_config_rejects_non_table_rediscovery(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "aw2sqlite.toml"
+            config_path.write_text(
+                'live_data_url = "http://127.0.0.1/livedata.htm"\n'
+                'database_path = "/tmp/aw2sqlite.db"\n'
+                'rediscovery = "always"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TypeError, "rediscovery must be a table"):
+                load_config(config_path)
+
     def test_load_config_rejects_mqtt_port_zero(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "aw2sqlite.toml"

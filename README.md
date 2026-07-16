@@ -47,7 +47,7 @@ Your station already serves its readings on your own network. This reads them st
 
 * **Local Network Operation:** Talks directly to the station's `livedata.htm` - no cloud API, no API key, no account
 * **Zero Dependencies:** Pure Python with no (potentially) untrusted 3rd parties
-* **Auto-Discovery:** The setup wizard scans your subnet and finds the station for you
+* **Auto-Discovery:** The setup wizard scans your subnet and finds the station for you, and if DHCP later moves the station to a new IP the daemon rescans and re-identifies it by MAC address automatically
 * **A Database That Keeps Up With Your Hardware:** Sensor columns are added automatically as new readings appear, timestamps are deduplicated across restarts, stale console pages are skipped so an unchanged reading never becomes a fake per-minute sample, and implausible values are flagged
 * **Plugs Into What You Already Run:** Home Assistant (MQTT discovery), Prometheus and Grafana (`/metrics`), and Datasette (generated metadata) - see [Recipes](docs/recipes.md)
 * **Runs As A Service:** Docker, launchd, and systemd units included, with an [HTTP JSON API](docs/api.md) for live and aggregated data
@@ -304,6 +304,11 @@ webhook_url = "https://hooks.example.com/alert"
 failure_threshold = 3  # optional; consecutive failed fetches before alerting
 timeout_seconds = 5.0  # optional; webhook request timeout
 
+# Optional: automatically re-locate the station if DHCP changes its IP
+[rediscovery]
+enabled = true         # optional (default: true); set false to disable
+failure_threshold = 2  # optional; consecutive failed fetches before rescanning
+
 # Optional: publish each observation as JSON to an MQTT broker
 [mqtt]
 host = "192.168.0.10"
@@ -350,7 +355,7 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Stale console pages are skipped: the station only refreshes its readings every few minutes, so polling more often re-serves an identical page. The daemon detects this using the station's own reported observation time (the `Time`-named field on `livedata.htm`, e.g. `CurrTime`): it skips the write when that time has not advanced *and* the sensor values are identical, so a genuine sub-minute update (an unchanged time but changed readings) is still stored. Consoles that expose no such field fall back to skipping when every sensor value matches the last stored reading. This prevents a single unchanged reading from being fabricated into many distinct per-minute observations. Because the reported time carries no timezone or seconds it is used only as a change signal - the stored `ts` remains the collector's wall clock. The first poll after a (re)start has no prior reading, so it always inserts
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
-- When an `[mqtt]` config table is present, each observation is also published to the broker as JSON (failures are logged and never interrupt collection)
+- If the station's DHCP lease moves it to a new IP, the daemon re-locates it automatically (on by default; disable with `enabled = false` in the `[rediscovery]` config table). After `failure_threshold` consecutive failed fetches (default 2) it rescans the local subnet and verifies the station's identity via the MAC address it recorded from the OS ARP cache after a previous successful fetch, falling back to an "exactly one station found" rule when no MAC data is available. A relocation is logged as a warning and switches the polled URL in memory only - the config file is never modified, so the original URL is used again after a restart. Rescans run at most once every 5 minutes
 - When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires on the first success afterward - one alert per outage, and webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
 - Sensor-name mappings, labels, and units are persisted in SQLite. The adjacent `<database_stem>_metadata.json` Datasette sidecar is refreshed when new sensor columns appear and can be regenerated offline after a restore (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
 - Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown
