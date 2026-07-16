@@ -13,26 +13,39 @@ class DisabledInputParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.filtered_values: LiveData = {}
+        # The station's own reported observation time, captured separately so it
+        # can flag stale/unchanged pages without polluting the numeric sensors.
+        self.station_time: str | None = None
 
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "input":
-            # Convert attrs list to dict for easier access
-            attr_dict = dict(attrs)
+        if tag != "input":
+            return
+        # Convert attrs list to dict for easier access
+        attr_dict = dict(attrs)
+        # Check if input is disabled (disabled attribute present)
+        if "disabled" not in attr_dict:
+            return
+        name = attr_dict.get("name")
+        value = attr_dict.get("value")
+        if name and value:
+            self._record_disabled_input(name, value)
 
-            # Check if input is disabled (disabled attribute present)
-            if "disabled" in attr_dict:
-                name = attr_dict.get("name")
-                value = attr_dict.get("value")
-
-                if name and value:
-                    if "Batt" in name or "Time" in name or "ID" in name:
-                        return
-
-                    try:
-                        self.filtered_values[name] = float(value)
-                    except ValueError:
-                        self.filtered_values[name] = None
+    def _record_disabled_input(self, name: str, value: str) -> None:
+        """Route a disabled input to the sensor map or the station-time slot."""
+        # The station's own reported time (e.g. `CurrTime` = "14:47 9/21/2021")
+        # is kept out of the numeric sensors but captured once for stale-page
+        # detection; battery-status and sensor-ID fields are discarded outright.
+        if "Time" in name:
+            if self.station_time is None:
+                self.station_time = value
+            return
+        if "Batt" in name or "ID" in name:
+            return
+        try:
+            self.filtered_values[name] = float(value)
+        except ValueError:
+            self.filtered_values[name] = None
 
 
 def extract_values(html_content: str) -> LiveData:
@@ -49,6 +62,27 @@ def extract_values(html_content: str) -> LiveData:
     parser = DisabledInputParser()
     parser.feed(html_content)
     return parser.filtered_values
+
+
+def extract_station_time(html_content: str) -> str | None:
+    """Return the station's own reported observation time, if the page has one.
+
+    The livedata page exposes a disabled `Time`-named input (e.g. `CurrTime`
+    holding "14:47 9/21/2021"). It carries no timezone or seconds, so it is not
+    a reliable absolute instant, but it advances only when the console refreshes
+    its reading - a dependable signal for detecting a stale/unchanged page.
+
+    Args:
+        html_content (str): The HTML content as a string.
+
+    Returns:
+        str | None: The raw station time string, or None when the page has no
+        `Time`-named field.
+
+    """
+    parser = DisabledInputParser()
+    parser.feed(html_content)
+    return parser.station_time
 
 
 class LabeledInputParser(HTMLParser):

@@ -1,6 +1,11 @@
 from unittest import TestCase
 
-from ambientweather2sqlite.awparser import extract_labels, extract_units, extract_values
+from ambientweather2sqlite.awparser import (
+    extract_labels,
+    extract_station_time,
+    extract_units,
+    extract_values,
+)
 from ambientweather2sqlite.units_mapping import Units
 
 
@@ -23,6 +28,32 @@ class TestAwparser(TestCase):
                 "rainrate": None,
             },
         )
+
+    def test_extract_station_time_captures_time_field(self):
+        html = """
+        <input name="CurrTime" value="14:47 9/21/2021" disabled>
+        <input name="tempf" value="72.5" disabled>
+        """
+
+        self.assertEqual(extract_station_time(html), "14:47 9/21/2021")
+
+    def test_extract_station_time_is_none_without_time_field(self):
+        html = '<input name="tempf" value="72.5" disabled>'
+
+        self.assertIsNone(extract_station_time(html))
+
+    def test_extract_station_time_keeps_first_time_field(self):
+        html = """
+        <input name="CurrTime" value="14:47 9/21/2021" disabled>
+        <input name="sensorTime" value="14:40 9/21/2021" disabled>
+        """
+
+        self.assertEqual(extract_station_time(html), "14:47 9/21/2021")
+
+    def test_extract_values_still_excludes_time_field(self):
+        html = '<input name="CurrTime" value="14:47 9/21/2021" disabled>'
+
+        self.assertNotIn("CurrTime", extract_values(html))
 
     def test_extract_labels_maps_all_inputs_in_a_row(self):
         html = """

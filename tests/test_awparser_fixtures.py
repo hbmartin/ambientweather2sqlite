@@ -8,7 +8,12 @@ firmware, drop its page into tests/fixtures/ and add a test class here.
 from pathlib import Path
 from unittest import TestCase
 
-from ambientweather2sqlite.awparser import extract_labels, extract_units, extract_values
+from ambientweather2sqlite.awparser import (
+    extract_labels,
+    extract_station_time,
+    extract_units,
+    extract_values,
+)
 from ambientweather2sqlite.units_mapping import Units
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -49,6 +54,9 @@ class TestObserverIpFixture(TestCase):
         self.assertNotIn("outBattSta1", values)
         self.assertNotIn("IDACC", values)
         self.assertNotIn("IDTran", values)
+
+    def test_captures_station_reported_time(self):
+        self.assertEqual(extract_station_time(self.html), "14:47 9/21/2021")
 
     def test_excludes_enabled_inputs(self):
         values = extract_values(self.html)
