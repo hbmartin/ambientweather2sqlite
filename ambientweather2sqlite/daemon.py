@@ -340,8 +340,12 @@ def _is_stale_observation(
     """
     if previous_live_data is None:
         return False
-    if station_time is not None and previous_station_time is not None:
-        return station_time == previous_station_time
+    if (
+        station_time is not None
+        and previous_station_time is not None
+        and station_time != previous_station_time
+    ):
+        return False
     return live_data == previous_live_data
 
 

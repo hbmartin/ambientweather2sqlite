@@ -974,14 +974,27 @@ class TestIsStaleObservation(TestCase):
             _is_stale_observation(None, self._TIME, None, {"outTemp": 72.5}),
         )
 
-    def test_unchanged_station_time_is_stale(self):
-        # Station time takes precedence: an unchanged time means a stale page.
-        self.assertTrue(
+    def test_unchanged_station_time_with_changed_values_is_fresh(self):
+        # A repeated station time but changed values is a genuine sub-minute update
+        # (e.g. a fast-updating wind sensor within the same console minute), not a
+        # stale page. Only advancing station time OR identical values would skip it.
+        self.assertFalse(
             _is_stale_observation(
                 self._TIME,
                 self._TIME,
                 {"outTemp": 72.5},
                 {"outTemp": 99.9},
+            ),
+        )
+
+    def test_unchanged_station_time_and_values_is_stale(self):
+        # A repeated station time AND identical values is a stale page.
+        self.assertTrue(
+            _is_stale_observation(
+                self._TIME,
+                self._TIME,
+                {"outTemp": 72.5},
+                {"outTemp": 72.5},
             ),
         )
 
