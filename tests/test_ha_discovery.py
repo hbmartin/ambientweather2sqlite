@@ -3,7 +3,11 @@ from unittest import TestCase
 
 from ambientweather2sqlite.ha_discovery import build_discovery_messages
 from ambientweather2sqlite.models import MqttConfig
-from ambientweather2sqlite.units_mapping import Units, match_label_unit
+from ambientweather2sqlite.units_mapping import (
+    Units,
+    match_label_unit,
+    units_for_columns,
+)
 
 _CONFIG = MqttConfig(
     host="broker.local",
@@ -37,6 +41,42 @@ def _messages_by_column() -> dict[str, tuple[str, dict]]:
 
 
 class TestBuildDiscoveryMessages(TestCase):
+    def test_rain_rate_discovery_uses_intensity_and_retains_sensor_identity(self):
+        for raw in ("in", "mm"):
+            with self.subTest(unit=raw):
+                labels, units = units_for_columns(
+                    {
+                        "rainofhourly": "Hourly Rain Rate",
+                        "rate2": "Rain Rate",
+                        "hourrain": "Hourly Rain",
+                    },
+                    {Units.RAINFALL: raw},
+                )
+                messages = build_discovery_messages(labels, units, _CONFIG)
+                by_column = {
+                    topic.split("/")[-2]: (topic, json.loads(body))
+                    for topic, body in messages
+                }
+                for column in ("rainofhourly", "rate2"):
+                    topic, payload = by_column[column]
+                    self.assertEqual(
+                        topic,
+                        f"homeassistant/sensor/aw2sqlite_aw2sqlite/{column}/config",
+                    )
+                    self.assertEqual(
+                        payload["unique_id"], f"aw2sqlite_aw2sqlite_{column}"
+                    )
+                    self.assertEqual(
+                        payload["value_template"], f"{{{{ value_json.{column} }}}}"
+                    )
+                    self.assertEqual(payload["device_class"], "precipitation_intensity")
+                    self.assertEqual(payload["unit_of_measurement"], f"{raw}/h")
+                    self.assertEqual(payload["state_class"], "measurement")
+                self.assertEqual(
+                    by_column["hourrain"][1]["device_class"], "precipitation"
+                )
+                self.assertEqual(by_column["hourrain"][1]["unit_of_measurement"], raw)
+
     def test_one_message_per_labeled_column(self):
         messages = build_discovery_messages(_LABELS, _COLUMN_TO_UNIT, _CONFIG)
         self.assertEqual(len(messages), len(_LABELS))

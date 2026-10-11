@@ -1,6 +1,8 @@
 import json
+import sqlite3
 import stat
 import tempfile
+from contextlib import closing
 from http.client import HTTPException
 from pathlib import Path
 from unittest import TestCase
@@ -8,7 +10,9 @@ from unittest.mock import Mock, patch
 
 from ambientweather2sqlite.database import (
     create_database_if_not_exists,
+    insert_observation,
     persist_sensor_metadata,
+    query_sensor_metadata,
 )
 from ambientweather2sqlite.metadata import (
     _write_metadata_file,
@@ -20,6 +24,62 @@ from ambientweather2sqlite.units_mapping import Units
 
 
 class TestMetadata(TestCase):
+    @patch("ambientweather2sqlite.metadata.mureq.get")
+    def test_rain_rate_refresh_preserves_values_and_regenerates_offline(
+        self,
+        mock_get: Mock,
+    ) -> None:
+        live = (
+            "<table><tr><td>Hourly Rain Rate</td><td>"
+            '<input name="rainofhourly" disabled value="0.05"></td></tr>'
+            "<tr><td>Event Rain</td><td>"
+            '<input name="eventrain" disabled value="0.02"></td></tr></table>'
+        )
+        for raw, length in (("in", "inch"), ("mm", "millimeter")):
+            with self.subTest(unit=raw), tempfile.TemporaryDirectory() as temp_dir:
+                db_path = str(Path(temp_dir) / "weather.db")
+                create_database_if_not_exists(db_path)
+                insert_observation(
+                    db_path,
+                    {
+                        "ts": "2026-10-10T22:00:00Z",
+                        "rainofhourly": 0.05,
+                        "eventrain": 0.02,
+                    },
+                )
+                persist_sensor_metadata(
+                    db_path,
+                    {"rainofhourly": "Hourly Rain Rate"},
+                    {"rainofhourly": length},
+                )
+                mock_get.side_effect = [
+                    live,
+                    '<div class="item_1">Rainfall</div><select>'
+                    f"<option selected>{raw}</option></select>",
+                ]
+                labels, units = create_metadata(db_path, "http://station/livedata.htm")
+                self.assertEqual(labels["rainofhourly"], f"Hourly Rain Rate ({raw}/hr)")
+                self.assertEqual(units["rainofhourly"], f"{length} / hour")
+                self.assertEqual(units["eventrain"], length)
+                stored = {row[0]: row[3] for row in query_sensor_metadata(db_path)}
+                self.assertEqual(stored["rainofhourly"], f"{length} / hour")
+                with closing(sqlite3.connect(db_path)) as conn:
+                    self.assertEqual(
+                        conn.execute(
+                            "SELECT rainofhourly, eventrain FROM observations"
+                        ).fetchone(),
+                        (0.05, 0.02),
+                    )
+                path = metadata_path(db_path)
+                original = json.loads(path.read_text())
+                path.unlink()
+                write_metadata_from_database(db_path, "http://station/livedata.htm")
+                self.assertEqual(json.loads(path.read_text()), original)
+                self.assertEqual(
+                    original["databases"]["weather"]["tables"]["observations"]["units"],
+                    units,
+                )
+
     def test_atomic_metadata_write_preserves_sidecar_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / "weather.db")
