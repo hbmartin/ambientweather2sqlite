@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from itertools import pairwise
+from itertools import chain, pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -86,9 +86,9 @@ def _query_monitor_timestamp(
         rows = conn.execute(
             f"SELECT {_TS_COL} FROM {_DEFAULT_TABLE_NAME} ORDER BY {_TS_COL} DESC",
         )
-        # execute steps the SELECT and establishes its snapshot before the clock.
-        checked_at = now if now is not None else datetime.now(UTC)
-        for (raw,) in rows:
+        first_row = rows.fetchone()
+        checked_at = _normalize_current_time(now)
+        for (raw,) in chain((first_row,) if first_row is not None else (), rows):
             if isinstance(raw, str):
                 try:
                     latest = _parse_stored_timestamp(raw)

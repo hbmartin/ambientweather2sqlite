@@ -411,7 +411,8 @@ Home Assistant statistics.
 The daemon continuously fetches live data from your weather station's HTTP endpoint, parses sensor readings from the HTML page, and inserts them into the SQLite database every 60 seconds.
 
 - On an interactive terminal, current readings are displayed as labeled JSON with a live countdown to the next fetch. When stdout is captured (Docker, systemd, launchd, or a redirect), the daemon prints one concise line per cycle instead - the countdown and full-JSON redraw rely on terminal cursor control that would otherwise accumulate as unbounded noise in a log file
-- Errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running. That log (and the API server's `<database_stem>_server.log`) uses a size-capped rotating handler (5 MB × 4 files) so it cannot grow without bound
+- Configuration loading rejects a malformed `live_data_url` before collection starts: missing hosts, invalid IDNA hostnames, malformed IPv6 addresses, and invalid ports produce a configuration error. Validation performs no DNS lookup or network request and preserves valid URL strings
+- Runtime errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running. Invalid receiver URLs and receiver request failures have separate diagnostics; a response that cannot be decoded as UTF-8 is a request failure. That log (and the API server's `<database_stem>_server.log`) uses a size-capped rotating handler (5 MB × 4 files) so it cannot grow without bound
 - Implausible sensor values (e.g. temperature outside -150..200 range) emit a warning log
 - If a fetch parses zero sensors (e.g. the station page format changed), a warning is logged and nothing is inserted for that interval
 - Stale console pages are skipped: the station only refreshes its readings every few minutes, so polling more often re-serves an identical page. The daemon detects this using the station's own reported observation time (the `Time`-named field on `livedata.htm`, e.g. `CurrTime`): it skips the write when that time has not advanced *and* the sensor values are identical, so a genuine sub-minute update (an unchanged time but changed readings) is still stored. Consoles that expose no such field fall back to skipping when every sensor value matches the last stored reading. This prevents a single unchanged reading from being fabricated into many distinct per-minute observations. Because the reported time carries no timezone or seconds it is used only as a change signal - the stored `ts` remains the collector's wall clock. The first poll after a (re)start has no prior reading, so it always inserts
@@ -422,7 +423,7 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Every valid parsed page resets consecutive fetch-failure and rediscovery counters, even when readings are unchanged or an insert fails. Unchanged pages still produce no new observation. A failed database insert is logged and does not publish an observation, print a successful recording, or establish stored-data recovery
 - When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires after the first fresh observation is successfully stored afterward. The online payload's `consecutive_failures` reports the largest uninterrupted failure streak while that offline notification was pending, even when valid pages reset the current counter before storage succeeds. Webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
 - Sensor-name mappings, labels, and units are persisted in SQLite. The adjacent `<database_stem>_metadata.json` Datasette sidecar is refreshed when new sensor columns appear and can be regenerated offline after a restore (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
-- Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown during startup and collection
+- Press `Ctrl+C` to stop; on the main thread, `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown during startup and collection unless an opaque native handler is already installed (see [monitor shutdown behavior](#embedded-collection-recovery-monitor))
 
 ### Database Schema
 
@@ -459,9 +460,11 @@ reported separately and skipped when choosing the latest usable observation;
 they cannot hide a stall or prevent valid advancing rows from proving recovery.
 If no usable row remains, freshness ages from the last verified timestamp or
 startup time. Stored observations are never rewritten or deleted by monitoring.
-Each production check samples its comparison clock after the SELECT establishes
-its read snapshot, so a row committed between check entry and the query is not
-mistaken for a future timestamp.
+Each production check explicitly fetches the first row before sampling its
+comparison clock, then streams remaining rows using that same time. A row
+committed between check entry and the read is not mistaken for a future
+timestamp. Caller-supplied comparison times are normalized to UTC; naive times
+are interpreted as UTC.
 Existing stale-page detection still
 uses the receiver's reported time and sensor values before storing observations.
 
@@ -474,8 +477,9 @@ are not forcibly terminated.
 
 SIGTERM handling is installed only on the main thread and the previous Python
 handler is restored on exit. An opaque native handler is left unchanged because
-Python cannot restore it through the signal API. Ctrl+C handling still covers
-startup and collection.
+Python cannot restore it through the signal API. A startup warning explains that
+the SIGTERM translator was not installed and graceful SIGTERM shutdown depends
+on the native handler. Ctrl+C handling still covers startup and collection.
 
 The HTTP health endpoint has a separate purpose and threshold: it returns `503`
 when observations are older than 180 seconds, while the collection monitor's

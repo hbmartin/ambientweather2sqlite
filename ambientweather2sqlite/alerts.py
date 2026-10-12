@@ -34,15 +34,15 @@ class AlertNotifier:
     def record_failure(self) -> None:
         """Count a failed fetch, firing station_offline at the threshold."""
         self.consecutive_failures += 1
-        if (
+        notify_offline = (
             not self.alert_sent
             and self.consecutive_failures >= self.config.failure_threshold
-        ):
+        )
+        if notify_offline:
             self.alert_sent = True
-            self._remember_failure_peak()
-            self._post("station_offline")
-        else:
-            self._remember_failure_peak()
+        self._remember_failure_peak()
+        if notify_offline:
+            self._post("station_offline", self.consecutive_failures)
 
     def _remember_failure_peak(self) -> None:
         if self.alert_sent:
@@ -59,20 +59,16 @@ class AlertNotifier:
         """Reset the failure count, firing station_online after an outage."""
         if self.alert_sent:
             self._remember_failure_peak()
-            self._post("station_online")
+            self._post("station_online", self._pending_failure_peak)
         self.consecutive_failures = 0
         self.alert_sent = False
         self._pending_failure_peak = 0
 
-    def _post(self, event: str) -> None:
+    def _post(self, event: str, consecutive_failures: int) -> None:
         payload: dict[str, object] = {
             "event": event,
             "station_url": self.station_url,
-            "consecutive_failures": (
-                self._pending_failure_peak
-                if event == "station_online"
-                else self.consecutive_failures
-            ),
+            "consecutive_failures": consecutive_failures,
             "timestamp": datetime.now(UTC).isoformat(),
         }
         self._send(payload)

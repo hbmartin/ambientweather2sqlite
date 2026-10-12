@@ -153,6 +153,10 @@ seconds, so any check that treats non-2xx as failure will catch stalled
 collection without custom parsing.
 
 Health requests can proceed while `GET /` waits or retries against the receiver.
+Malformed configured station URLs are rejected before collection starts without
+DNS or network requests. Runtime invalid-URL diagnostics are separate from
+receiver request failures, including invalid UTF-8 responses; runtime errors
+continue through the normal retry path.
 The embedded collection monitor separately defaults to a 300-second outage
 threshold; an existing stale database alerts immediately after restart, while
 an empty database receives startup grace. Valid unchanged pages reset network
@@ -163,15 +167,18 @@ for verified recovery, rejected timestamps, and bounded shutdown behavior.
 
 Receiver requests serialize by normalized hostname or IP address without a DNS
 lookup for lock selection. Use a consistent address: a hostname and its IP alias
-have different lock keys. Monitor checks sample the clock after establishing
-their SQLite read snapshot, avoiding false future-timestamp diagnostics for rows
-committed just before the SELECT.
+have different lock keys. Monitor checks explicitly fetch the first row before
+sampling the clock and stream the remaining rows against that one time, avoiding
+false future-timestamp diagnostics for rows committed just before the read.
+Supplied comparison times normalize to UTC, with naive times interpreted as UTC.
 
 When outage webhooks are enabled, `station_online` waits for a committed
 observation and reports the largest consecutive fetch-failure streak while the
 offline notification was pending. Unchanged valid pages and failed inserts reset
 the current network counter without erasing that outage history. During shutdown,
 Python SIGTERM handlers are restored; opaque native handlers are left untouched.
+A startup warning reports when graceful SIGTERM shutdown depends on that native
+handler because the collector's translator could not be installed.
 
 Container healthcheck:
 

@@ -4,7 +4,7 @@ import signal
 import sqlite3
 import sys
 import tempfile
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from http.client import HTTPException
 from logging.handlers import RotatingFileHandler
@@ -215,9 +215,8 @@ class TestDaemonHelpers(TestCase):
             with _sigterm_handler():
                 self.assertEqual(signal.getsignal(signal.SIGTERM), original)
 
-        thread = threading.Thread(target=run)
-        thread.start()
-        thread.join()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(run).result(timeout=2)
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
 
     @patch("ambientweather2sqlite.daemon._publish_discovery")

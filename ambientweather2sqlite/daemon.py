@@ -129,13 +129,17 @@ def next_deadline(epoch: float, period_seconds: int, now: float) -> float:
 
 
 @contextmanager
-def _sigterm_handler() -> Generator[None]:
+def _sigterm_handler(logger: logging.Logger | None = None) -> Generator[None]:
     """Translate SIGTERM into an interrupt while preserving a restorable handler."""
     if threading.current_thread() is not threading.main_thread():
         yield
         return
     previous = signal.getsignal(signal.SIGTERM)
     if previous is None:
+        (logger or logging.getLogger(__name__)).warning(
+            "SIGTERM translator not installed: preserving an opaque native handler; "
+            "graceful SIGTERM shutdown depends on that handler",
+        )
         yield
         return
 
@@ -567,7 +571,7 @@ def start_daemon(  # noqa: PLR0913
     )
     try:
         with (
-            _sigterm_handler(),
+            _sigterm_handler(logger),
             monitor_collection(
                 database_path,
                 recovery_config,

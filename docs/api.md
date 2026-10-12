@@ -22,8 +22,12 @@ Returns current sensor readings fetched directly from the weather station, along
 Concurrent live requests wait for the host lock and each fetch a page. There is
 no admission limit, shared-fetch response, or separate queue timeout. Existing
 transport timeouts and retry behavior apply after acquiring the lock; DNS
-resolution remains the transport's responsibility. Malformed receiver URLs are
-reported as fetch errors.
+resolution remains the transport's responsibility. Configuration loading rejects
+structurally malformed `live_data_url` values before startup without DNS or
+network requests. At runtime, URL validation failures are reported as
+`Invalid receiver URL`; UTF-8 response-decoding failures use
+`Receiver request failed`. Existing timeout and network diagnostics still apply,
+and runtime failures remain recoverable.
 
 `rainofhourly` is the ObserverIP **Hourly Rain Rate**, measured in inches/hour
 or millimeters/hour according to the station's rainfall setting. Its metadata
