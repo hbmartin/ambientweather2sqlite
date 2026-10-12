@@ -119,7 +119,12 @@ class TestCollectionMonitor(TestCase):
             timestamp = (self.now + timedelta(seconds=seconds)).isoformat()
             with patch(
                 "ambientweather2sqlite.recovery._query_monitor_timestamp",
-                return_value=(timestamp, datetime.fromisoformat(timestamp), False),
+                return_value=(
+                    timestamp,
+                    datetime.fromisoformat(timestamp),
+                    False,
+                    self.now + timedelta(seconds=420),
+                ),
             ):
                 self._check(420)
         self.assertTrue(self.monitor.stalled)
@@ -153,7 +158,7 @@ class TestCollectionMonitor(TestCase):
                 self.subTest(raw=raw),
                 patch(
                     "ambientweather2sqlite.recovery._query_monitor_timestamp",
-                    return_value=(None, None, True),
+                    return_value=(None, None, True, self.now + timedelta(seconds=300)),
                 ),
             ):
                 self._check(300)
@@ -177,7 +182,7 @@ class TestCollectionMonitor(TestCase):
             now = self.now + timedelta(seconds=300 + sample)
             with patch(
                 "ambientweather2sqlite.recovery._query_monitor_timestamp",
-                return_value=(now.isoformat(), now, False),
+                return_value=(now.isoformat(), now, False, now),
             ):
                 monitor.check(now)
                 monitor.check(now)

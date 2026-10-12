@@ -6,7 +6,6 @@
 import json
 import logging
 import signal
-import socket
 import sqlite3
 import tempfile
 import threading
@@ -198,12 +197,12 @@ class TestMonitorRobustness(TestCase):
         entered = threading.Event()
         release = threading.Event()
 
-        def blocked_query(*_args: object) -> tuple[str, datetime, bool]:
+        def blocked_query(*_args: object) -> tuple[str, datetime, bool, datetime]:
             entered.set()
             if not release.wait(timeout=4):
                 raise TimeoutError
             latest = _NOW - timedelta(seconds=600)
-            return latest.isoformat(), latest, False
+            return latest.isoformat(), latest, False, _NOW
 
         with patch(
             "ambientweather2sqlite.recovery._query_monitor_timestamp",
@@ -281,7 +280,8 @@ class TestMonitorRobustness(TestCase):
                     connection.execute("DELETE FROM observations")
                 self._insert_raw(raw)
                 self.assertEqual(
-                    _query_monitor_timestamp(self.database, _NOW), (raw, _NOW, False)
+                    _query_monitor_timestamp(self.database, _NOW),
+                    (raw, _NOW, False, _NOW),
                 )
 
 
@@ -580,20 +580,12 @@ class TestDaemonLifecycle(TestCase):
 
 
 class TestReceiverConcurrency(TestCase):
-    def test_receiver_address_normalizes_aliases_and_dns_failure(self) -> None:
-        address = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.10", 0))
-        with patch(
-            "ambientweather2sqlite.station_http.socket.getaddrinfo",
-            return_value=[address],
-        ):
-            first = _receiver_lock("http://Observer.LOCAL/livedata.htm")
-            self.assertIs(first, _receiver_lock(_STATION_URL))
-        with patch(
-            "ambientweather2sqlite.station_http.socket.getaddrinfo",
-            side_effect=socket.gaierror,
-        ):
+    def test_receiver_address_normalizes_hosts_without_dns_lookup(self) -> None:
+        with patch("socket.getaddrinfo", side_effect=OSError("DNS unavailable")) as dns:
             first = _receiver_lock("http://Observer.LOCAL/livedata.htm")
             self.assertIs(first, _receiver_lock("http://observer.local/station.htm"))
+            self.assertIsNot(first, _receiver_lock(_STATION_URL))
+            dns.assert_not_called()
         self.assertEqual(_receiver_address("http://[2001:0db8::1]/"), "2001:db8::1")
 
     def test_unused_receiver_locks_are_released(self) -> None:

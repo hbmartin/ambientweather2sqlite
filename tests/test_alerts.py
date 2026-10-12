@@ -75,6 +75,7 @@ class TestAlertNotifier(TestCase):
         self.assertEqual(mock_post.call_count, 2)
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["event"], "station_online")
+        self.assertEqual(payload["consecutive_failures"], 3)
         self.assertEqual(notifier.consecutive_failures, 0)
         self.assertFalse(notifier.alert_sent)
 

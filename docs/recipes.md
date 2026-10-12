@@ -161,6 +161,18 @@ failure counters but do not establish stored-data recovery. See
 [collection monitor](https://github.com/hbmartin/ambientweather2sqlite#embedded-collection-recovery-monitor)
 for verified recovery, rejected timestamps, and bounded shutdown behavior.
 
+Receiver requests serialize by normalized hostname or IP address without a DNS
+lookup for lock selection. Use a consistent address: a hostname and its IP alias
+have different lock keys. Monitor checks sample the clock after establishing
+their SQLite read snapshot, avoiding false future-timestamp diagnostics for rows
+committed just before the SELECT.
+
+When outage webhooks are enabled, `station_online` waits for a committed
+observation and reports the largest consecutive fetch-failure streak while the
+offline notification was pending. Unchanged valid pages and failed inserts reset
+the current network counter without erasing that outage history. During shutdown,
+Python SIGTERM handlers are restored; opaque native handlers are left untouched.
+
 Container healthcheck:
 
 ```yaml

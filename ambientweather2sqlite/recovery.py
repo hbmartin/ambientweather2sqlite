@@ -53,12 +53,13 @@ class CollectionMonitor:
 
     def check(self, now: datetime | None = None) -> None:
         """Inspect freshness once; database failures never imply recovery."""
-        now = now or datetime.now(UTC)
         try:
-            raw, latest, rejected = _query_monitor_timestamp(self.database_path, now)
+            raw, latest, rejected, checked_at = _query_monitor_timestamp(
+                self.database_path, now
+            )
             age = _observation_age(
                 latest or self._last_verified_timestamp or self.started_at,
-                now,
+                checked_at,
             )
         except (sqlite3.Error, OSError, ValueError) as error:
             self._report_database_error(error)

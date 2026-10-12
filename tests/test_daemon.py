@@ -15,9 +15,9 @@ from unittest.mock import Mock, call, patch
 from ambientweather2sqlite.daemon import (
     _collect_forever,
     _configure_logging,
-    _install_sigterm_handler,
     _is_stale_observation,
     _refresh_metadata,
+    _sigterm_handler,
     _store_observation,
     clear_lines,
     fetch_once,
@@ -198,21 +198,24 @@ class TestDaemonHelpers(TestCase):
         # not queue up the two missed slots.
         self.assertEqual(next_deadline(100.0, 60, 230.0), 280.0)
 
-    def test_install_sigterm_handler_raises_keyboard_interrupt(self):
+    def test_sigterm_handler_raises_keyboard_interrupt_and_restores(self) -> None:
         original = signal.getsignal(signal.SIGTERM)
-        try:
-            _install_sigterm_handler()
+        with _sigterm_handler():
             handler = signal.getsignal(signal.SIGTERM)
             self.assertNotEqual(handler, original)
             assert callable(handler)
             with self.assertRaises(KeyboardInterrupt):
                 handler(signal.SIGTERM, None)
-        finally:
-            signal.signal(signal.SIGTERM, original)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), original)
 
-    def test_install_sigterm_handler_is_noop_off_main_thread(self):
+    def test_sigterm_handler_is_noop_off_main_thread(self) -> None:
         original = signal.getsignal(signal.SIGTERM)
-        thread = threading.Thread(target=_install_sigterm_handler)
+
+        def run() -> None:
+            with _sigterm_handler():
+                self.assertEqual(signal.getsignal(signal.SIGTERM), original)
+
+        thread = threading.Thread(target=run)
         thread.start()
         thread.join()
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
@@ -731,7 +734,6 @@ class TestStartDaemon(TestCase):
                         "ambientweather2sqlite.daemon.create_metadata",
                         side_effect=error,
                     ),
-                    patch("ambientweather2sqlite.daemon._install_sigterm_handler"),
                     patch(
                         "ambientweather2sqlite.daemon._collect_forever",
                         side_effect=KeyboardInterrupt,

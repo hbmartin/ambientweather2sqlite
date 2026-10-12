@@ -1,6 +1,6 @@
 # HTTP JSON API
 
-When a port is configured, the daemon serves HTTP requests concurrently on background threads with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`. Live receiver requests to `GET /` serialize per receiver, including retries. SQLite-only requests such as `/health` and `/metrics` can proceed while those live requests are blocked.
+When a port is configured, the daemon serves HTTP requests concurrently on background threads with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`. Live receiver requests to `GET /` serialize by normalized hostname or IP address, including retries. Lock selection performs no DNS lookup, and hostname/IP aliases do not share a lock. SQLite-only requests such as `/health` and `/metrics` can proceed while those live requests are blocked.
 
 The server binds to `localhost` by default; set `host` in the config (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.
 
@@ -18,6 +18,12 @@ The server binds to `localhost` by default; set `host` in the config (or pass `-
 ## `GET /` - Live Data
 
 Returns current sensor readings fetched directly from the weather station, along with human-readable labels.
+
+Concurrent live requests wait for the host lock and each fetch a page. There is
+no admission limit, shared-fetch response, or separate queue timeout. Existing
+transport timeouts and retry behavior apply after acquiring the lock; DNS
+resolution remains the transport's responsibility. Malformed receiver URLs are
+reported as fetch errors.
 
 `rainofhourly` is the ObserverIP **Hourly Rain Rate**, measured in inches/hour
 or millimeters/hour according to the station's rainfall setting. Its metadata
