@@ -105,12 +105,16 @@ Rain-rate sensors advertise `precipitation_intensity` with `in/h` or `mm/h`;
 rain accumulations advertise `precipitation` with `in` or `mm`. Rate detection
 uses the known `rainofhourly` field or an explicit **Rain Rate** or **Rainfall
 Rate** label, case-insensitively, including **Rain-Rate**, **Rain_Rate**, and
-**RainRate**. Discovery corrects recognized length units to hourly units for rate
-fields. Rainfall sensors with missing, unrecognized, or incompatible units are
+**RainRate**. Normal successful startup supplies corrected rate units; the
+discovery builder also defensively normalizes recognized length units to hourly
+units when supplied with older rate metadata. Rainfall sensors with missing,
+unrecognized, or incompatible units are
 published as generic sensors without a device class or unit.
 
-After updating the collector, refresh stored metadata with `aw2sqlite metadata`
-while the station is reachable and restart the collector to republish discovery.
+After updating the collector, restart it while the station is reachable.
+Successful startup refreshes stored metadata and republishes discovery.
+Running `aw2sqlite metadata` beforehand is optional; it refreshes metadata
+without restarting the collector and does not republish discovery.
 Discovery topics, unique IDs, and numeric readings remain the same.
 
 An existing rate sensor's change from `in` to `in/h` or `mm` to `mm/h` can pause
@@ -118,8 +122,26 @@ Home Assistant's long-term statistics and create a unit-changed repair issue.
 Follow the
 [statistics repair instructions](https://www.home-assistant.io/docs/tools/dev-tools/#fixing-a-statistics-issue).
 If historical readings were already rates with an incorrect accumulation unit
-label, update the old statistics' unit without converting their values. The
-collector does not migrate or delete Home Assistant statistics.
+label, update the old statistics' unit without converting their values.
+
+Solar discovery follows the station's selected unit:
+
+| Station unit | Metadata unit | Home Assistant device class | Home Assistant unit |
+| --- | --- | --- | --- |
+| `w/m2` | `watt / meter ** 2` | `irradiance` | `W/m²` |
+| `lux` | `lux` | `illuminance` | `lx` |
+| `fc` | `lumen / foot ** 2` | Omitted (generic sensor) | `fc` |
+
+Foot-candle readings keep their native numbers and unit without conversion to
+lux. Solar sensors with missing, unrecognized, or incompatible units are generic
+sensors without a device class or unit. Value templates and sensor identity
+remain the same.
+
+An existing foot-candle sensor changing from incorrectly labeled `lx` to `fc`
+may require [statistics repair](https://www.home-assistant.io/docs/tools/dev-tools/#fixing-a-statistics-issue).
+Relabel historical statistics without converting their values only when the
+numbers already represent foot-candles. The collector does not migrate or delete
+Home Assistant statistics.
 
 ## Uptime monitoring
 
@@ -195,7 +217,8 @@ aw2sqlite metadata --offline
 ```
 
 Run `aw2sqlite metadata` without `--offline` when the station is reachable and
-you want to refresh its current labels and units. Offline regeneration exits
+you want to refresh its current labels and units without restarting the collector.
+The command does not republish Home Assistant discovery. Offline regeneration exits
 with status 1 and preserves an existing sidecar if the database contains no
 stored sensor metadata.
 
@@ -203,8 +226,9 @@ For existing rainfall metadata, an online refresh corrects rate fields to
 `inch / hour` or `millimeter / hour` and leaves accumulated rainfall in `inch`
 or `millimeter`. Offline regeneration only exports stored labels and units;
 it preserves corrected metadata after an online refresh but does not correct
-older metadata by itself. Restart the collector after the refresh to republish
-Home Assistant discovery.
+older metadata by itself. Successful collector startup also refreshes stored
+metadata and republishes Home Assistant discovery while the station is reachable,
+so a separate online refresh before restarting is optional.
 
 ## Ad-hoc analysis
 

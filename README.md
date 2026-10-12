@@ -259,11 +259,12 @@ or a field explicitly labeled **Rain Rate** or **Rainfall Rate**) use
 in display labels. Matching is case-insensitive and also accepts forms such as
 **Rain-Rate**, **Rain_Rate**, and **RainRate**. Other rainfall fields, including
 **Hourly Rain** without **Rate** and **Calibrated Rainfall**, retain `inch` or
-`millimeter`. This corrects unit metadata
-without converting recorded values. Run `aw2sqlite metadata` against the
-reachable station to refresh existing metadata; subsequent offline exports
-preserve the corrected units. Offline export alone does not correct previously
-stored units. Restart the collector to republish Home Assistant discovery.
+`millimeter`. This corrects unit metadata without converting recorded values.
+When the station is reachable, successful collector startup refreshes stored
+metadata and republishes Home Assistant discovery. Run `aw2sqlite metadata`
+separately to refresh labels and units without restarting the collector; the
+command does not republish discovery. Subsequent offline exports preserve the
+stored units. Offline export alone does not correct previously stored units.
 
 ### `aw2sqlite install-launchd`
 
@@ -360,7 +361,11 @@ Rain-rate sensors advertise `precipitation_intensity` with `in/h` or `mm/h`;
 rain totals advertise `precipitation` with `in` or `mm`. Existing discovery
 topics and sensor identifiers are preserved when the collector restarts.
 
-Discovery corrects recognized length units to hourly units for rate fields.
+Successful collector startup refreshes stored metadata from the reachable
+station and republishes discovery, so restarting after an upgrade is sufficient.
+Running `aw2sqlite metadata` first is optional. Normal startup supplies corrected
+rain-rate units; the discovery builder also defensively normalizes recognized
+length units to hourly units when supplied with older rate metadata.
 Rainfall sensors with missing, unrecognized, or incompatible units are published
 as generic sensors without a device class or unit; their readings still use the
 same observation topic.
@@ -371,7 +376,26 @@ repair and pause long-term statistics. Follow the
 [statistics repair instructions](https://www.home-assistant.io/docs/tools/dev-tools/#fixing-a-statistics-issue).
 If historical readings already represented a rate and only their unit label was
 wrong, choose the option to update the old statistics' unit without converting
-their values. The collector does not migrate or delete Home Assistant statistics.
+their values.
+
+Solar sensors use the station's selected unit to choose their discovery class:
+
+| Station unit | Metadata unit | Home Assistant device class | Home Assistant unit |
+| --- | --- | --- | --- |
+| `w/m2` | `watt / meter ** 2` | `irradiance` | `W/m²` |
+| `lux` | `lux` | `illuminance` | `lx` |
+| `fc` | `lumen / foot ** 2` | Omitted (generic sensor) | `fc` |
+
+Foot-candle readings retain their native numbers and unit; the collector does
+not convert them to lux. Solar sensors with missing, unrecognized, or incompatible
+units are published as generic sensors without a device class or unit. Discovery
+topics, sensor identifiers, and value templates remain the same.
+
+An existing foot-candle sensor changing from incorrectly labeled `lx` to `fc`
+may also require [statistics repair](https://www.home-assistant.io/docs/tools/dev-tools/#fixing-a-statistics-issue).
+Relabel old statistics without converting their values only if the historical
+numbers already represent foot-candles. The collector does not migrate or delete
+Home Assistant statistics.
 
 ## Data Collection
 

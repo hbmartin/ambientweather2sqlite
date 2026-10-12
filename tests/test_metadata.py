@@ -14,16 +14,80 @@ from ambientweather2sqlite.database import (
     persist_sensor_metadata,
     query_sensor_metadata,
 )
+from ambientweather2sqlite.ha_discovery import build_discovery_messages
 from ambientweather2sqlite.metadata import (
     _write_metadata_file,
     create_metadata,
     metadata_path,
     write_metadata_from_database,
 )
+from ambientweather2sqlite.models import MqttConfig
 from ambientweather2sqlite.units_mapping import Units
 
 
 class TestMetadata(TestCase):
+    @patch("ambientweather2sqlite.metadata.mureq.get")
+    def test_solar_metadata_discovery_preserves_values_and_regenerates_offline(
+        self,
+        mock_get: Mock,
+    ) -> None:
+        live = (
+            "<table><tr><td>Solar Radiation</td><td>"
+            '<input name="solarrad" disabled value="105.98"></td></tr></table>'
+        )
+        config = MqttConfig(host="broker.local", topic="weather/observations")
+        for raw, pint_unit, device_class, ha_unit in (
+            ("w/m2", "watt / meter ** 2", "irradiance", "W/m²"),
+            ("lux", "lux", "illuminance", "lx"),
+            ("fc", "lumen / foot ** 2", None, "fc"),
+        ):
+            with self.subTest(unit=raw), tempfile.TemporaryDirectory() as temp_dir:
+                db_path = str(Path(temp_dir) / "weather.db")
+                create_database_if_not_exists(db_path)
+                insert_observation(
+                    db_path,
+                    {"ts": "2026-10-12T12:00:00Z", "solarrad": 105.98},
+                )
+                mock_get.side_effect = [
+                    live,
+                    '<div class="item_1">Solar Radiation</div><select>'
+                    f"<option selected>{raw}</option></select>",
+                ]
+                labels, units = create_metadata(db_path, "http://station/livedata.htm")
+                self.assertEqual(labels, {"solarrad": f"Solar Radiation ({raw})"})
+                self.assertEqual(units, {"solarrad": pint_unit})
+                stored = {row[0]: row[3] for row in query_sensor_metadata(db_path)}
+                self.assertEqual(stored["solarrad"], pint_unit)
+                messages = build_discovery_messages(labels, units, config)
+                self.assertEqual(len(messages), 1)
+                topic, body = messages[0]
+                payload = json.loads(body)
+                self.assertEqual(
+                    topic, "homeassistant/sensor/aw2sqlite_aw2sqlite/solarrad/config"
+                )
+                self.assertEqual(payload["name"], "Solar Radiation")
+                self.assertEqual(payload["unit_of_measurement"], ha_unit)
+                if device_class is None:
+                    self.assertNotIn("device_class", payload)
+                else:
+                    self.assertEqual(payload["device_class"], device_class)
+                self.assertEqual(payload["value_template"], "{{ value_json.solarrad }}")
+                self.assertEqual(units, {"solarrad": pint_unit})
+                path = metadata_path(db_path)
+                original = json.loads(path.read_text())
+                path.unlink()
+                write_metadata_from_database(db_path, "http://station/livedata.htm")
+                self.assertEqual(json.loads(path.read_text()), original)
+                self.assertEqual(
+                    original["databases"]["weather"]["tables"]["observations"]["units"],
+                    units,
+                )
+                with closing(sqlite3.connect(db_path)) as conn:
+                    self.assertEqual(
+                        conn.execute("SELECT solarrad FROM observations").fetchall(),
+                        [(105.98,)],
+                    )
+
     @patch("ambientweather2sqlite.metadata.mureq.get")
     def test_rain_rate_refresh_preserves_values_and_regenerates_offline(
         self,

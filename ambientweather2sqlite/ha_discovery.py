@@ -31,7 +31,7 @@ AW_UNIT_TO_HA_UNIT: dict[str, str] = {
     "degF": "°F",
     "lux": "lx",
     "w/m2": "W/m²",
-    "fc": "lx",
+    "fc": "fc",
     "ug/m3": "µg/m³",
     "%": "%",
     "°": "°",
@@ -44,8 +44,6 @@ UNIT_TO_DEVICE_CLASS: dict[Units, str | None] = {
     Units.HUMIDITY: "humidity",
     Units.PRESSURE: "pressure",
     Units.WIND: "wind_speed",
-    Units.RAINFALL: "precipitation",
-    Units.SOLAR_RADIATION: "irradiance",
     Units.PM2_5: "pm25",
     Units.WIND_DIRECTION: None,
 }
@@ -82,16 +80,31 @@ def _rain_sensor_attributes(ha_unit: str | None, *, rate: bool) -> dict[str, str
     return {"device_class": device_class, "unit_of_measurement": ha_unit}
 
 
+def _solar_sensor_attributes(ha_unit: str | None) -> dict[str, str]:
+    """Pair solar classes with their units and preserve native foot-candles."""
+    match ha_unit:
+        case "W/m²":
+            return {"device_class": "irradiance", "unit_of_measurement": ha_unit}
+        case "lx":
+            return {"device_class": "illuminance", "unit_of_measurement": ha_unit}
+        case "fc":
+            return {"unit_of_measurement": ha_unit}
+        case _:
+            return {}
+
+
 def _sensor_attributes(
     column: str, label: str, column_to_unit: ColumnUnitMap
 ) -> dict[str, str]:
-    """Resolve unit and device class together for rainfall sensors."""
+    """Resolve unit and device class together for rainfall and solar sensors."""
     ha_unit = _ha_unit(column, column_to_unit)
     if is_rain_rate(column, label):
         return _rain_sensor_attributes(ha_unit, rate=True)
     unit_category = match_label_unit(label)
     if unit_category == Units.RAINFALL:
         return _rain_sensor_attributes(ha_unit, rate=False)
+    if unit_category == Units.SOLAR_RADIATION:
+        return _solar_sensor_attributes(ha_unit)
     attributes: dict[str, str] = {}
     if ha_unit is not None:
         attributes["unit_of_measurement"] = ha_unit
