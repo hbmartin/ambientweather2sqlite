@@ -66,6 +66,43 @@ def _ha_unit(column: str, column_to_unit: ColumnUnitMap) -> str | None:
     return AW_UNIT_TO_HA_UNIT.get(aw_unit)
 
 
+def _rain_sensor_attributes(ha_unit: str | None, *, rate: bool) -> dict[str, str]:
+    """Pair rainfall device classes with compatible units, or leave them generic."""
+    if ha_unit is None:
+        return {}
+    if rate:
+        ha_unit = {"in": "in/h", "mm": "mm/h"}.get(ha_unit, ha_unit)
+        device_class = "precipitation_intensity"
+        valid_units = {"in/h", "mm/h"}
+    else:
+        device_class = "precipitation"
+        valid_units = {"in", "mm"}
+    if ha_unit not in valid_units:
+        return {}
+    return {"device_class": device_class, "unit_of_measurement": ha_unit}
+
+
+def _sensor_attributes(
+    column: str, label: str, column_to_unit: ColumnUnitMap
+) -> dict[str, str]:
+    """Resolve unit and device class together for rainfall sensors."""
+    ha_unit = _ha_unit(column, column_to_unit)
+    if is_rain_rate(column, label):
+        return _rain_sensor_attributes(ha_unit, rate=True)
+    unit_category = match_label_unit(label)
+    if unit_category == Units.RAINFALL:
+        return _rain_sensor_attributes(ha_unit, rate=False)
+    attributes: dict[str, str] = {}
+    if ha_unit is not None:
+        attributes["unit_of_measurement"] = ha_unit
+    if (
+        unit_category is not None
+        and (device_class := UNIT_TO_DEVICE_CLASS.get(unit_category)) is not None
+    ):
+        attributes["device_class"] = device_class
+    return attributes
+
+
 def build_discovery_messages(
     labels: LabelMap,
     column_to_unit: ColumnUnitMap,
@@ -92,16 +129,7 @@ def build_discovery_messages(
             "state_class": "measurement",
             "device": device,
         }
-        if (ha_unit := _ha_unit(column, column_to_unit)) is not None:
-            payload["unit_of_measurement"] = ha_unit
-        unit_category = match_label_unit(label)
-        if is_rain_rate(column, label):
-            payload["device_class"] = "precipitation_intensity"
-        elif (
-            unit_category is not None
-            and (device_class := UNIT_TO_DEVICE_CLASS.get(unit_category)) is not None
-        ):
-            payload["device_class"] = device_class
+        payload.update(_sensor_attributes(column, label, column_to_unit))
         topic = f"{config.discovery_prefix}/sensor/{node_id}/{column}/config"
         messages.append((topic, json.dumps(payload)))
     return messages
