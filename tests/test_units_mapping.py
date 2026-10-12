@@ -1,9 +1,48 @@
 from unittest import TestCase
 
-from ambientweather2sqlite.units_mapping import Units, units_for_columns
+from ambientweather2sqlite.units_mapping import Units, is_rain_rate, units_for_columns
 
 
 class TestRainUnits(TestCase):
+    def test_explicit_rate_labels(self) -> None:
+        for label in (
+            "Hourly Rain Rate",
+            "RAIN RATE",
+            "Rainfall Rate",
+            "Rain-Rate",
+            "Rain_Rate",
+            "RainRate",
+            "RainfallRate",
+            "Hourly Rain Rate (in/hr)",
+            "Rainfall Rate (mm/hr)",
+        ):
+            with self.subTest(label=label):
+                self.assertTrue(is_rain_rate("other", label))
+
+    def test_rate_substrings_do_not_classify_accumulations(self) -> None:
+        for label in (
+            "Calibrated Rainfall",
+            "Rainfall calibrated",
+            "Drain flow rate",
+            "Hourly Rain",
+            "Rainfall moderate",
+            "Rain Rateometer",
+            "Brain Rate",
+        ):
+            with self.subTest(label=label):
+                self.assertFalse(is_rain_rate("other", label))
+                self.assertTrue(is_rain_rate("rainofhourly", label))
+
+    def test_calibrated_accumulation_keeps_length_units(self) -> None:
+        for raw, length in (("in", "inch"), ("mm", "millimeter")):
+            with self.subTest(unit=raw):
+                labels, units = units_for_columns(
+                    {"eventrain": "Calibrated Rainfall"},
+                    {Units.RAINFALL: raw},
+                )
+                self.assertEqual(labels, {"eventrain": f"Calibrated Rainfall ({raw})"})
+                self.assertEqual(units, {"eventrain": length})
+
     def test_rate_and_accumulation_have_distinct_dimensions(self) -> None:
         sensors = {
             "rainofhourly": "Hourly Rain Rate",

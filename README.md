@@ -253,13 +253,17 @@ embedded in the database—useful after restoring a backup. If the database has
 no stored sensor metadata, the command exits with status 1 and leaves any
 existing sidecar unchanged.
 
-Rainfall-rate fields (`rainofhourly` or a field explicitly labeled as a rain
-rate) use `inch / hour` or `millimeter / hour` in stored metadata and `in/hr`
-or `mm/hr` in display labels. Accumulated rainfall, including **Hourly Rain**
-without **Rate**, retains `inch` or `millimeter`. This corrects unit metadata
+For the station's `in` and `mm` rainfall settings, rate fields (`rainofhourly`
+or a field explicitly labeled **Rain Rate** or **Rainfall Rate**) use
+`inch / hour` or `millimeter / hour` in stored metadata and `in/hr` or `mm/hr`
+in display labels. Matching is case-insensitive and also accepts forms such as
+**Rain-Rate**, **Rain_Rate**, and **RainRate**. Other rainfall fields, including
+**Hourly Rain** without **Rate** and **Calibrated Rainfall**, retain `inch` or
+`millimeter`. This corrects unit metadata
 without converting recorded values. Run `aw2sqlite metadata` against the
 reachable station to refresh existing metadata; subsequent offline exports
-preserve the corrected units.
+preserve the corrected units. Offline export alone does not correct previously
+stored units. Restart the collector to republish Home Assistant discovery.
 
 ### `aw2sqlite install-launchd`
 
@@ -355,6 +359,19 @@ uses a non-default prefix.
 Rain-rate sensors advertise `precipitation_intensity` with `in/h` or `mm/h`;
 rain totals advertise `precipitation` with `in` or `mm`. Existing discovery
 topics and sensor identifiers are preserved when the collector restarts.
+
+Discovery corrects recognized length units to hourly units for rate fields.
+Rainfall sensors with missing, unrecognized, or incompatible units are published
+as generic sensors without a device class or unit; their readings still use the
+same observation topic.
+
+When upgrading an existing installation, changing a rate sensor from `in` to
+`in/h` or from `mm` to `mm/h` can trigger Home Assistant's unit-changed statistics
+repair and pause long-term statistics. Follow the
+[statistics repair instructions](https://www.home-assistant.io/docs/tools/dev-tools/#fixing-a-statistics-issue).
+If historical readings already represented a rate and only their unit label was
+wrong, choose the option to update the old statistics' unit without converting
+their values. The collector does not migrate or delete Home Assistant statistics.
 
 ## Data Collection
 

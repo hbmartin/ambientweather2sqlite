@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,9 @@ LABEL_TO_UNIT: dict[str, Units] = {
     "winddir": Units.WIND_DIRECTION,
     "wind": Units.WIND,  # this line must be below winddir
 }
+
+_RAIN_RATE_LABEL = re.compile(r"\b(?:rain|rainfall)[\s_-]*rate\b", re.IGNORECASE)
+_RAIN_UNIT_TO_RATE_UNIT: dict[str, str] = {"in": "in/hr", "mm": "mm/hr"}
 
 # https://github.com/hgrecco/pint/blob/master/pint/default_en.txt
 AW_UNIT_TO_PINT_UNIT: dict[str, str] = {
@@ -66,17 +70,16 @@ def match_label_unit(label: str) -> Units | None:
 
     LABEL_TO_UNIT is ordered so that "winddir" matches before "wind".
     """
+    normalized_label = label.lower()
     for substr, unit in LABEL_TO_UNIT.items():
-        if substr.lower() in label.lower():
+        if substr in normalized_label:
             return unit
     return None
 
 
 def is_rain_rate(column: str, label: str) -> bool:
     """Distinguish the ObserverIP rate field from accumulated hourly rain."""
-    return column == "rainofhourly" or (
-        "rain" in label.lower() and "rate" in label.lower()
-    )
+    return column == "rainofhourly" or _RAIN_RATE_LABEL.search(label) is not None
 
 
 def units_for_columns(
@@ -92,8 +95,8 @@ def units_for_columns(
             continue
         if (raw_unit := units.get(unit)) is None:
             continue
-        if rate and raw_unit in {"in", "mm"}:
-            raw_unit = f"{raw_unit}/hr"
+        if rate:
+            raw_unit = _RAIN_UNIT_TO_RATE_UNIT.get(raw_unit, raw_unit)
         column_to_unit[column] = AW_UNIT_TO_PINT_UNIT.get(raw_unit, raw_unit)
         labels_with_units[column] = f"{label} ({raw_unit})"
 

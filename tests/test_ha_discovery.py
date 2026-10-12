@@ -1,6 +1,9 @@
 import json
 from unittest import TestCase
 
+from hypothesis import given
+from hypothesis import strategies as st
+
 from ambientweather2sqlite.ha_discovery import build_discovery_messages
 from ambientweather2sqlite.models import MqttConfig
 from ambientweather2sqlite.units_mapping import (
@@ -41,7 +44,9 @@ def _messages_by_column() -> dict[str, tuple[str, dict]]:
 
 
 class TestBuildDiscoveryMessages(TestCase):
-    def test_rain_rate_discovery_uses_intensity_and_retains_sensor_identity(self):
+    def test_rain_rate_discovery_uses_intensity_and_retains_sensor_identity(
+        self,
+    ) -> None:
         for raw in ("in", "mm"):
             with self.subTest(unit=raw):
                 labels, units = units_for_columns(
@@ -76,6 +81,110 @@ class TestBuildDiscoveryMessages(TestCase):
                     by_column["hourrain"][1]["device_class"], "precipitation"
                 )
                 self.assertEqual(by_column["hourrain"][1]["unit_of_measurement"], raw)
+
+    def test_rain_discovery_normalizes_known_units_without_changing_metadata(
+        self,
+    ) -> None:
+        for unit, rate_unit, total_unit in (
+            ("in", "in/h", "in"),
+            ("inch", "in/h", "in"),
+            ("mm", "mm/h", "mm"),
+            ("millimeter", "mm/h", "mm"),
+            ("in/hr", "in/h", None),
+            ("inch / hour", "in/h", None),
+            ("mm/hr", "mm/h", None),
+            ("millimeter / hour", "mm/h", None),
+        ):
+            with self.subTest(unit=unit):
+                labels = {
+                    "rainofhourly": "Intensity",
+                    "rate2": "Rainfall Rate",
+                    "eventrain": "Calibrated Rainfall",
+                    "hourrain": "Hourly Rain",
+                }
+                units = dict.fromkeys(labels, unit)
+                original_units = units.copy()
+                messages = build_discovery_messages(labels, units, _CONFIG)
+                self.assertEqual(units, original_units)
+                for topic, body in messages:
+                    column = topic.split("/")[-2]
+                    payload = json.loads(body)
+                    self.assertEqual(
+                        topic,
+                        f"homeassistant/sensor/aw2sqlite_aw2sqlite/{column}/config",
+                    )
+                    self.assertEqual(
+                        payload["unique_id"], f"aw2sqlite_aw2sqlite_{column}"
+                    )
+                    self.assertEqual(
+                        payload["value_template"], f"{{{{ value_json.{column} }}}}"
+                    )
+                    self.assertEqual(payload["state_topic"], _CONFIG.topic)
+                    self.assertEqual(payload["state_class"], "measurement")
+                    if column in {"rainofhourly", "rate2"}:
+                        self.assertEqual(
+                            payload["device_class"], "precipitation_intensity"
+                        )
+                        self.assertEqual(payload["unit_of_measurement"], rate_unit)
+                    elif total_unit is not None:
+                        self.assertEqual(payload["device_class"], "precipitation")
+                        self.assertEqual(payload["unit_of_measurement"], total_unit)
+                    else:
+                        self.assertNotIn("device_class", payload)
+                        self.assertNotIn("unit_of_measurement", payload)
+
+    def test_unrecognized_rain_units_produce_generic_sensors(self) -> None:
+        labels = {
+            "rainofhourly": "Hourly Rain Rate",
+            "rate2": "Rain-Rate",
+            "eventrain": "Calibrated Rainfall",
+        }
+        for unit in (None, "unknown", "cm", "fahrenheit", "percent"):
+            with self.subTest(unit=unit):
+                units = {} if unit is None else dict.fromkeys(labels, unit)
+                messages = build_discovery_messages(labels, units, _CONFIG)
+                self.assertEqual(len(messages), len(labels))
+                for topic, body in messages:
+                    column = topic.split("/")[-2]
+                    payload = json.loads(body)
+                    self.assertNotIn("device_class", payload)
+                    self.assertNotIn("unit_of_measurement", payload)
+                    self.assertEqual(payload["name"], labels[column])
+                    self.assertEqual(
+                        payload["unique_id"], f"aw2sqlite_aw2sqlite_{column}"
+                    )
+                    self.assertEqual(
+                        payload["value_template"], f"{{{{ value_json.{column} }}}}"
+                    )
+                    self.assertEqual(payload["state_class"], "measurement")
+
+    @given(
+        unit=st.one_of(
+            st.none(),
+            st.sampled_from(
+                ("inch", "millimeter", "inch / hour", "millimeter / hour", "fahrenheit")
+            ),
+            st.text(),
+        ),
+    )
+    def test_rain_discovery_always_pairs_class_with_valid_unit(
+        self, unit: str | None
+    ) -> None:
+        labels = {"rainofhourly": "Intensity", "eventrain": "Calibrated Rainfall"}
+        units = {} if unit is None else dict.fromkeys(labels, unit)
+        original_units = units.copy()
+        for topic, body in build_discovery_messages(labels, units, _CONFIG):
+            column = topic.split("/")[-2]
+            payload = json.loads(body)
+            if "device_class" not in payload:
+                self.assertNotIn("unit_of_measurement", payload)
+            elif column == "rainofhourly":
+                self.assertEqual(payload["device_class"], "precipitation_intensity")
+                self.assertIn(payload["unit_of_measurement"], {"in/h", "mm/h"})
+            else:
+                self.assertEqual(payload["device_class"], "precipitation")
+                self.assertIn(payload["unit_of_measurement"], {"in", "mm"})
+        self.assertEqual(units, original_units)
 
     def test_one_message_per_labeled_column(self):
         messages = build_discovery_messages(_LABELS, _COLUMN_TO_UNIT, _CONFIG)

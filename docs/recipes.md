@@ -23,6 +23,13 @@ them alongside the values:
 uvx --with datasette-pint datasette aw2sqlite.db -m aw2sqlite_metadata.json
 ```
 
+For the station's `in` and `mm` rainfall settings, `rainofhourly` and fields
+explicitly labeled **Rain Rate** or **Rainfall Rate** use `inch / hour` or
+`millimeter / hour` in metadata, with `in/hr` or `mm/hr` in display labels.
+Other rainfall fields, including **Hourly Rain** without **Rate** and
+**Calibrated Rainfall**, remain accumulations in `inch` or `millimeter`.
+Correcting these units does not convert recorded values.
+
 !!! tip "Backup first"
 
     Run Datasette against a [backup copy](#nightly-backups) rather than the live
@@ -93,6 +100,26 @@ Sensor values are read from the regular observation topic via a value template,
 so enabling discovery does not add any extra publishing traffic.
 
 Set `discovery_prefix` if your Home Assistant instance uses a non-default prefix.
+
+Rain-rate sensors advertise `precipitation_intensity` with `in/h` or `mm/h`;
+rain accumulations advertise `precipitation` with `in` or `mm`. Rate detection
+uses the known `rainofhourly` field or an explicit **Rain Rate** or **Rainfall
+Rate** label, case-insensitively, including **Rain-Rate**, **Rain_Rate**, and
+**RainRate**. Discovery corrects recognized length units to hourly units for rate
+fields. Rainfall sensors with missing, unrecognized, or incompatible units are
+published as generic sensors without a device class or unit.
+
+After updating the collector, refresh stored metadata with `aw2sqlite metadata`
+while the station is reachable and restart the collector to republish discovery.
+Discovery topics, unique IDs, and numeric readings remain the same.
+
+An existing rate sensor's change from `in` to `in/h` or `mm` to `mm/h` can pause
+Home Assistant's long-term statistics and create a unit-changed repair issue.
+Follow the
+[statistics repair instructions](https://www.home-assistant.io/docs/tools/dev-tools/#fixing-a-statistics-issue).
+If historical readings were already rates with an incorrect accumulation unit
+label, update the old statistics' unit without converting their values. The
+collector does not migrate or delete Home Assistant statistics.
 
 ## Uptime monitoring
 
@@ -171,6 +198,13 @@ Run `aw2sqlite metadata` without `--offline` when the station is reachable and
 you want to refresh its current labels and units. Offline regeneration exits
 with status 1 and preserves an existing sidecar if the database contains no
 stored sensor metadata.
+
+For existing rainfall metadata, an online refresh corrects rate fields to
+`inch / hour` or `millimeter / hour` and leaves accumulated rainfall in `inch`
+or `millimeter`. Offline regeneration only exports stored labels and units;
+it preserves corrected metadata after an online refresh but does not correct
+older metadata by itself. Restart the collector after the refresh to republish
+Home Assistant discovery.
 
 ## Ad-hoc analysis
 

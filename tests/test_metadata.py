@@ -32,7 +32,7 @@ class TestMetadata(TestCase):
         live = (
             "<table><tr><td>Hourly Rain Rate</td><td>"
             '<input name="rainofhourly" disabled value="0.05"></td></tr>'
-            "<tr><td>Event Rain</td><td>"
+            "<tr><td>Calibrated Rainfall</td><td>"
             '<input name="eventrain" disabled value="0.02"></td></tr></table>'
         )
         for raw, length in (("in", "inch"), ("mm", "millimeter")):
@@ -60,9 +60,11 @@ class TestMetadata(TestCase):
                 labels, units = create_metadata(db_path, "http://station/livedata.htm")
                 self.assertEqual(labels["rainofhourly"], f"Hourly Rain Rate ({raw}/hr)")
                 self.assertEqual(units["rainofhourly"], f"{length} / hour")
+                self.assertEqual(labels["eventrain"], f"Calibrated Rainfall ({raw})")
                 self.assertEqual(units["eventrain"], length)
                 stored = {row[0]: row[3] for row in query_sensor_metadata(db_path)}
                 self.assertEqual(stored["rainofhourly"], f"{length} / hour")
+                self.assertEqual(stored["eventrain"], length)
                 with closing(sqlite3.connect(db_path)) as conn:
                     self.assertEqual(
                         conn.execute(
