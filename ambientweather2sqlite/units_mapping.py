@@ -39,6 +39,8 @@ AW_UNIT_TO_PINT_UNIT: dict[str, str] = {
     "knot": "knot",
     "mm": "millimeter",
     "in": "inch",
+    "in/hr": "inch / hour",
+    "mm/hr": "millimeter / hour",
     "hpa": "1e2 * pascal",
     "inhg": "inch_Hg",
     "mmhg": "millimeter_Hg",
@@ -70,6 +72,13 @@ def match_label_unit(label: str) -> Units | None:
     return None
 
 
+def is_rain_rate(column: str, label: str) -> bool:
+    """Distinguish the ObserverIP rate field from accumulated hourly rain."""
+    return column == "rainofhourly" or (
+        "rain" in label.lower() and "rate" in label.lower()
+    )
+
+
 def units_for_columns(
     labels: LabelMap,
     units: dict[Units, str],
@@ -78,10 +87,13 @@ def units_for_columns(
     labels_with_units: LabelMap = {}
     for column, label in labels.items():
         labels_with_units[column] = label
-        if (unit := match_label_unit(label)) is None:
+        rate = is_rain_rate(column, label)
+        if (unit := Units.RAINFALL if rate else match_label_unit(label)) is None:
             continue
         if (raw_unit := units.get(unit)) is None:
             continue
+        if rate and raw_unit in {"in", "mm"}:
+            raw_unit = f"{raw_unit}/hr"
         column_to_unit[column] = AW_UNIT_TO_PINT_UNIT.get(raw_unit, raw_unit)
         labels_with_units[column] = f"{label} ({raw_unit})"
 

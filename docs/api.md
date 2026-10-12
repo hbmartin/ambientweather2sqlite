@@ -19,6 +19,13 @@ The server binds to `localhost` by default; set `host` in the config (or pass `-
 
 Returns current sensor readings fetched directly from the weather station, along with human-readable labels.
 
+`rainofhourly` is the ObserverIP **Hourly Rain Rate**, measured in inches/hour
+or millimeters/hour according to the station's rainfall setting. Its metadata
+label includes `in/hr` or `mm/hr`; event and accumulated rain remain in inches
+or millimeters. A field labeled **Hourly Rain** without **Rate** is an
+accumulation. Correcting these metadata units does not convert sensor values
+or rename JSON fields.
+
 **Response:**
 
 ```json

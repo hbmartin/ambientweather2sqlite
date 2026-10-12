@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from .units_mapping import PINT_UNIT_TO_AW_UNIT, Units, match_label_unit
+from .units_mapping import PINT_UNIT_TO_AW_UNIT, Units, is_rain_rate, match_label_unit
 
 if TYPE_CHECKING:
     from .models import ColumnUnitMap, LabelMap, MqttConfig
@@ -22,6 +22,8 @@ AW_UNIT_TO_HA_UNIT: dict[str, str] = {
     "knot": "kn",
     "mm": "mm",
     "in": "in",
+    "in/hr": "in/h",
+    "mm/hr": "mm/h",
     "hpa": "hPa",
     "inhg": "inHg",
     "mmhg": "mmHg",
@@ -93,7 +95,9 @@ def build_discovery_messages(
         if (ha_unit := _ha_unit(column, column_to_unit)) is not None:
             payload["unit_of_measurement"] = ha_unit
         unit_category = match_label_unit(label)
-        if (
+        if is_rain_rate(column, label):
+            payload["device_class"] = "precipitation_intensity"
+        elif (
             unit_category is not None
             and (device_class := UNIT_TO_DEVICE_CLASS.get(unit_category)) is not None
         ):
