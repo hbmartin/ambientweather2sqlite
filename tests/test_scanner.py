@@ -184,7 +184,7 @@ class TestScanPort80(TestCase):
 
 class TestProbeWeatherStation(TestCase):
     @patch("ambientweather2sqlite.scanner.extract_values")
-    @patch("ambientweather2sqlite.scanner.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_returns_url_when_station_found(self, mock_get, mock_extract):
         mock_get.return_value = "<html>...</html>"
         mock_extract.return_value = {"outTemp": 72.0}
@@ -194,7 +194,7 @@ class TestProbeWeatherStation(TestCase):
         self.assertEqual(result, "http://192.168.1.10/livedata.htm")
 
     @patch("ambientweather2sqlite.scanner.extract_values")
-    @patch("ambientweather2sqlite.scanner.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_returns_none_when_no_data(self, mock_get, mock_extract):
         mock_get.return_value = "<html></html>"
         mock_extract.return_value = {}
@@ -203,7 +203,7 @@ class TestProbeWeatherStation(TestCase):
 
         self.assertIsNone(result)
 
-    @patch("ambientweather2sqlite.scanner.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_returns_none_on_timeout(self, mock_get):
         mock_get.side_effect = TimeoutError
 
@@ -211,7 +211,7 @@ class TestProbeWeatherStation(TestCase):
 
         self.assertIsNone(result)
 
-    @patch("ambientweather2sqlite.scanner.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_returns_none_on_http_exception(self, mock_get):
         mock_get.side_effect = HTTPException("bad response")
 

@@ -218,7 +218,7 @@ class TestServer(TestCase):
         self.server.update_live_data_url(new_url)
 
         with patch(
-            "ambientweather2sqlite.server.mureq.get",
+            "ambientweather2sqlite.station_http.mureq.get",
             return_value="<html />",
         ) as mock_get:
             self._get_json("/")

@@ -1,6 +1,6 @@
 # HTTP JSON API
 
-When a port is configured, the daemon starts an HTTP server in a background thread with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`.
+When a port is configured, the daemon serves HTTP requests concurrently on background threads with CORS enabled (`Access-Control-Allow-Origin: *`). Server requests are logged to `<database_stem>_server.log`. Live receiver requests to `GET /` serialize per receiver, including retries. SQLite-only requests such as `/health` and `/metrics` can proceed while those live requests are blocked.
 
 The server binds to `localhost` by default; set `host` in the config (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.
 
@@ -192,6 +192,13 @@ the endpoint responds with HTTP `503` - so Docker `HEALTHCHECK`, Kubernetes
 probes, and uptime monitors alert on stalled collection out of the box. An
 empty database reports `"ok"` with `age_seconds: null`, so a freshly
 deployed daemon passes its readiness probe before the first observation.
+
+This 180-second readiness threshold is independent of the embedded collection
+monitor's configurable outage threshold (300 seconds by default). That monitor
+reports an existing stale database immediately at startup, grants startup grace
+to an empty database, and requires advancing committed observations for recovery.
+See the [collection monitor](https://github.com/hbmartin/ambientweather2sqlite#embedded-collection-recovery-monitor)
+for rejected-timestamp handling, notification behavior, and bounded shutdown.
 
 See [Recipes](recipes.md#uptime-monitoring) for container and Kubernetes probe configuration.
 

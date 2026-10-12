@@ -13,7 +13,6 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import FrameType
 
-from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_station_time, extract_values
 from ambientweather2sqlite.server import Server
 
@@ -35,7 +34,7 @@ from .models import (
 from .mqtt import MqttError, publish, publish_message
 from .recovery import monitor_collection
 from .rediscovery import StationRediscovery
-from .station_http import STATION_REQUEST_LOCK
+from .station_http import station_get
 
 # Cap the rotating daemon log so it cannot grow without bound on a
 # long-running deployment: up to 4 files of ~5 MB each (~20 MB total).
@@ -146,8 +145,7 @@ def _install_sigterm_handler() -> None:
 def fetch_once(live_data_url: str) -> None:
     """Fetch a single observation and print it without writing to the DB."""
     try:
-        with STATION_REQUEST_LOCK:
-            body = mureq.get(live_data_url)
+        body = station_get(live_data_url)
         live_data = extract_values(body)
     except (TimeoutError,):
         print("Error: Weather station timed out.", file=sys.stderr)
@@ -275,13 +273,13 @@ def _refresh_metadata(  # noqa: PLR0913
     return True
 
 
-def _record_cycle_success(
+def _record_fetch_success(
     notifier: AlertNotifier | None,
     rediscovery: StationRediscovery | None,
 ) -> None:
-    """Reset failure trackers after storing a fresh observation."""
+    """Reset reachability failures after parsing a valid receiver page."""
     if notifier is not None:
-        notifier.record_success()
+        notifier.record_fetch_success()
     if rediscovery is not None:
         rediscovery.record_success()
 
@@ -310,7 +308,6 @@ def _handle_failed_cycle(  # noqa: PLR0913
     rediscovery: StationRediscovery | None,
     on_url_change: Callable[[str], None] | None,
     live_data_url: str,
-    epoch: float,
     period_seconds: int,
     *,
     interactive: bool = True,
@@ -330,7 +327,7 @@ def _handle_failed_cycle(  # noqa: PLR0913
     )
     now = time.monotonic()
     wait_for_next_update(
-        max(next_deadline(epoch, period_seconds, now), now + period_seconds),
+        now + period_seconds,
         show_countdown=interactive,
     )
     return live_data_url, extra_lines
@@ -402,6 +399,50 @@ def _is_stale_observation(
     return live_data == previous_live_data
 
 
+def _fetch_receiver_page(
+    live_data_url: str,
+    logger: logging.Logger,
+    *,
+    interactive: bool,
+) -> tuple[str, LiveData, int]:
+    """Fetch and parse a page, retaining the diagnostic for each failure kind."""
+    try:
+        body = station_get(live_data_url)
+        live_data = extract_values(body)
+    except (TimeoutError,):
+        logger.info("TimeoutError")
+        lines = (
+            _status("Warming up weather station's server...", interactive=True)
+            if interactive
+            else 0
+        )
+        return "", {}, lines
+    except (HTTPException, OSError) as error:
+        logger.info("%s\n%s", type(error).__name__, error)
+        return (
+            "",
+            {},
+            _status(
+                f"Error fetching live data: {error}",
+                interactive=interactive,
+            ),
+        )
+    if not live_data:
+        logger.warning(
+            "Parsed 0 sensors from %s - the station page format may have changed",
+            live_data_url,
+        )
+        return (
+            body,
+            live_data,
+            _status(
+                "Warning: parsed 0 sensors from station page",
+                interactive=interactive,
+            ),
+        )
+    return body, live_data, 0
+
+
 def _collect_forever(  # noqa: PLR0913
     live_data_url: str,
     database_path: str,
@@ -426,69 +467,24 @@ def _collect_forever(  # noqa: PLR0913
         collection_attempt += 1
         if interactive:
             clear_lines(remove_newlines)
-        try:
-            with STATION_REQUEST_LOCK:
-                body = mureq.get(live_data_url)
-            live_data = extract_values(body)
-        except (TimeoutError,):
-            logger.info("TimeoutError")
-            # Pace retries even during warmup. Captured streams omit the
-            # repeated status line; the rotating daemon log still records it.
-            if interactive:
-                remove_newlines = _status(
-                    "Warming up weather station's server...",
-                    interactive=True,
-                )
-            live_data_url, extra_lines = _handle_failed_cycle(
-                notifier,
-                rediscovery,
-                on_url_change,
-                live_data_url,
-                epoch,
-                period_seconds,
-                interactive=interactive,
-            )
-            remove_newlines += extra_lines
-            continue
-        except (HTTPException, OSError) as e:
-            logger.info("%s\n%s", type(e).__name__, e)
-            remove_newlines = _status(
-                f"Error fetching live data: {e}",
-                interactive=interactive,
-            )
-            live_data_url, extra_lines = _handle_failed_cycle(
-                notifier,
-                rediscovery,
-                on_url_change,
-                live_data_url,
-                epoch,
-                period_seconds,
-                interactive=interactive,
-            )
-            remove_newlines += extra_lines
-            continue
+        remove_newlines = 0
+        body, live_data, remove_newlines = _fetch_receiver_page(
+            live_data_url,
+            logger,
+            interactive=interactive,
+        )
         if not live_data:
-            # An unparseable page means no data is flowing, so it counts
-            # toward the offline alert just like a failed fetch.
-            logger.warning(
-                "Parsed 0 sensors from %s - the station page format may have changed",
-                live_data_url,
-            )
-            remove_newlines = _status(
-                "Warning: parsed 0 sensors from station page",
-                interactive=interactive,
-            )
             live_data_url, extra_lines = _handle_failed_cycle(
                 notifier,
                 rediscovery,
                 on_url_change,
                 live_data_url,
-                epoch,
                 period_seconds,
                 interactive=interactive,
             )
             remove_newlines += extra_lines
             continue
+        _record_fetch_success(notifier, rediscovery)
         station_time = extract_station_time(body)
         if _is_stale_observation(
             previous_station_time,
@@ -516,7 +512,8 @@ def _collect_forever(  # noqa: PLR0913
                 collection_attempt=collection_attempt,
             )
             if stored:
-                _record_cycle_success(notifier, rediscovery)
+                if notifier is not None:
+                    notifier.record_success()
                 remove_newlines = _emit_observation(
                     labels,
                     live_data,
@@ -562,26 +559,35 @@ def start_daemon(  # noqa: PLR0913
         if alert_config is not None
         else None
     )
-    _install_sigterm_handler()
-    with monitor_collection(
-        database_path,
-        recovery_config,
-        logger,
-        notifier.collection_event if notifier is not None else None,
-    ):
-        _serve_station(
-            live_data_url,
+    main_thread = threading.current_thread() is threading.main_thread()
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    try:
+        _install_sigterm_handler()
+        with monitor_collection(
             database_path,
+            recovery_config,
             logger,
-            notifier,
-            port=port,
-            period_seconds=period_seconds,
-            host=host,
-            auth_token=auth_token,
-            mqtt_config=mqtt_config,
-            rediscovery_config=rediscovery_config,
-            interactive=interactive,
-        )
+            notifier.collection_event if notifier is not None else None,
+        ):
+            _serve_station(
+                live_data_url,
+                database_path,
+                logger,
+                notifier,
+                port=port,
+                period_seconds=period_seconds,
+                host=host,
+                auth_token=auth_token,
+                mqtt_config=mqtt_config,
+                rediscovery_config=rediscovery_config,
+                interactive=interactive,
+            )
+    except (KeyboardInterrupt,):
+        print(f"\nStopping... results saved to {database_path}")
+        sys.exit(0)
+    finally:
+        if main_thread:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def _serve_station(  # noqa: PLR0913
@@ -611,26 +617,26 @@ def _serve_station(  # noqa: PLR0913
 
     server = None
 
-    if port is not None:
-        print(f"Starting JSON server on http://{host}:{port}")
-        server = Server(live_data_url, database_path, port, host, auth_token)
-        server.start()
-
-    rediscovery_config = rediscovery_config or RediscoveryConfig()
-    rediscovery = (
-        StationRediscovery(rediscovery_config, live_data_url, logger)
-        if rediscovery_config.enabled
-        else None
-    )
-
-    def _apply_relocated_url(new_url: str) -> None:
-        """Propagate a relocated station URL to the server and notifier."""
-        if server is not None:
-            server.update_live_data_url(new_url)
-        if notifier is not None:
-            notifier.station_url = new_url
-
     try:
+        if port is not None:
+            print(f"Starting JSON server on http://{host}:{port}")
+            server = Server(live_data_url, database_path, port, host, auth_token)
+            server.start()
+
+        rediscovery_config = rediscovery_config or RediscoveryConfig()
+        rediscovery = (
+            StationRediscovery(rediscovery_config, live_data_url, logger)
+            if rediscovery_config.enabled
+            else None
+        )
+
+        def _apply_relocated_url(new_url: str) -> None:
+            """Propagate a relocated station URL to the server and notifier."""
+            if server is not None:
+                server.update_live_data_url(new_url)
+            if notifier is not None:
+                notifier.station_url = new_url
+
         _collect_forever(
             live_data_url,
             database_path,
@@ -644,8 +650,6 @@ def _serve_station(  # noqa: PLR0913
             on_url_change=_apply_relocated_url,
             interactive=interactive,
         )
-    except (KeyboardInterrupt,):
-        print(f"\nStopping... results saved to {database_path}")
+    finally:
         if server is not None:
             server.shutdown()
-        sys.exit(0)

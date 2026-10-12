@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from .database import parse_stored_timestamp, query_latest_timestamp
+from .database.metrics import _query_monitor_timestamp
 
 if TYPE_CHECKING:
     import logging
@@ -45,7 +45,9 @@ class CollectionMonitor:
     stalled: bool = field(default=False, init=False)
     fresh_observations: int = field(default=0, init=False)
     _last_timestamp: datetime | None = field(default=None, init=False)
+    _last_verified_timestamp: datetime | None = field(default=None, init=False)
     _database_error: bool = field(default=False, init=False)
+    _timestamp_error: bool = field(default=False, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
 
@@ -53,15 +55,29 @@ class CollectionMonitor:
         """Inspect freshness once; database failures never imply recovery."""
         now = now or datetime.now(UTC)
         try:
-            raw = query_latest_timestamp(self.database_path)
-            latest = parse_stored_timestamp(raw) if raw is not None else None
-            age = _observation_age(latest or self.started_at, now)
+            raw, latest, rejected = _query_monitor_timestamp(self.database_path, now)
+            age = _observation_age(
+                latest or self._last_verified_timestamp or self.started_at,
+                now,
+            )
         except (sqlite3.Error, OSError, ValueError) as error:
             self._report_database_error(error)
+            return
+        if self._stop.is_set():
             return
         if self._database_error:
             self.logger.info("Collection freshness database checks restored")
             self._database_error = False
+        if rejected and not self._timestamp_error:
+            self.logger.error(
+                "Ignoring invalid or future observation timestamps in freshness checks",
+            )
+        self._timestamp_error = rejected
+        if latest is not None and (
+            self._last_verified_timestamp is None
+            or latest > self._last_verified_timestamp
+        ):
+            self._last_verified_timestamp = latest
         self._check_freshness(raw, latest, age)
 
     def _report_database_error(self, error: Exception) -> None:
@@ -111,8 +127,11 @@ class CollectionMonitor:
         self._last_timestamp = latest
 
     def _notify(self, event: str, raw: str | None, age: float) -> None:
-        if self.on_event is not None:
-            self.on_event(event, raw, age)
+        if self.on_event is not None and not self._stop.is_set():
+            try:
+                self.on_event(event, raw, age)
+            except (Exception,):  # noqa: B013
+                self.logger.exception("Collection event callback failed: %s", event)
 
     def start(self) -> None:
         """Start an independent thread within the existing daemon."""
@@ -125,14 +144,27 @@ class CollectionMonitor:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            self.check()
+            try:
+                self.check()
+            except (Exception,):  # noqa: B013
+                self.fresh_observations = 0
+                self.logger.exception("Unexpected collection monitor check failure")
             self._stop.wait(self.config.check_interval_seconds)
 
     def stop(self) -> None:
         """Wake the monitor immediately and bound shutdown waiting."""
         self._stop.set()
-        if self._thread is not None:
+        if (
+            self._thread is not None
+            and self._thread.ident is not None
+            and self._thread is not threading.current_thread()
+        ):
             self._thread.join(timeout=1.0)
+            if self._thread.is_alive():
+                self.logger.warning(
+                    "Collection monitor is still finishing an in-flight check "
+                    "or callback",
+                )
 
 
 @contextmanager
@@ -147,8 +179,8 @@ def monitor_collection(
         yield
         return
     monitor = CollectionMonitor(database_path, config, logger, on_event)
-    monitor.start()
     try:
+        monitor.start()
         yield
     finally:
         monitor.stop()

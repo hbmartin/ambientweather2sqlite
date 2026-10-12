@@ -340,7 +340,9 @@ class TestDaemonDiscovery(TestCase):
             patch(
                 "ambientweather2sqlite.daemon.publish_message",
             ) as mock_publish_message,
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"outTemp": 72.5},
@@ -423,7 +425,7 @@ class TestDaemonAlerts(TestCase):
                 return_value=notifier,
             ) as mock_notifier_cls,
             patch(
-                "ambientweather2sqlite.daemon.mureq.get",
+                "ambientweather2sqlite.station_http.mureq.get",
                 side_effect=[
                     TimeoutError,
                     HTTPException("live data down"),
@@ -464,7 +466,9 @@ class TestDaemonAlerts(TestCase):
                 "ambientweather2sqlite.daemon.AlertNotifier",
                 return_value=notifier,
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch("ambientweather2sqlite.daemon.extract_values", return_value={}),
             patch(
                 "ambientweather2sqlite.daemon.wait_for_next_update",
@@ -501,7 +505,9 @@ class TestDaemonAlerts(TestCase):
                 "ambientweather2sqlite.daemon.AlertNotifier",
                 return_value=notifier,
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
@@ -567,7 +573,7 @@ class TestDaemonRediscovery(TestCase):
                 "ambientweather2sqlite.daemon.AlertNotifier",
                 return_value=mocks["notifier"],
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", mocks["fetch"]),
+            patch("ambientweather2sqlite.station_http.mureq.get", mocks["fetch"]),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
@@ -691,7 +697,9 @@ class TestFetchOnce(TestCase):
     def test_fetch_once_warns_on_zero_sensors(self):
         with (
             patch("builtins.print") as mock_print,
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch("ambientweather2sqlite.daemon.extract_values", return_value={}),
         ):
             fetch_once("http://127.0.0.1/livedata.htm")
@@ -758,7 +766,9 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.Server",
                 return_value=server,
             ) as mock_server,
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
@@ -825,7 +835,9 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({"tempf": "Outdoor Temperature"}, {}),
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
@@ -875,7 +887,7 @@ class TestStartDaemon(TestCase):
                 return_value=({}, {}),
             ),
             patch(
-                "ambientweather2sqlite.daemon.mureq.get",
+                "ambientweather2sqlite.station_http.mureq.get",
                 side_effect=[TimeoutError, KeyboardInterrupt],
             ),
             patch("ambientweather2sqlite.daemon.wait_for_next_update") as mock_wait,
@@ -916,7 +928,7 @@ class TestStartDaemon(TestCase):
             ),
             patch("ambientweather2sqlite.daemon.Server", return_value=server),
             patch(
-                "ambientweather2sqlite.daemon.mureq.get",
+                "ambientweather2sqlite.station_http.mureq.get",
                 side_effect=HTTPException("live data down"),
             ),
             patch(
@@ -962,7 +974,9 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({}, {}),
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={"tempf": 72.5},
@@ -1010,7 +1024,9 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({}, {}),
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 return_value={},
@@ -1060,7 +1076,9 @@ class TestStartDaemon(TestCase):
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({}, {}),
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", side_effect=TimeoutError),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", side_effect=TimeoutError
+            ),
             patch("ambientweather2sqlite.daemon.wait_for_next_update") as mock_wait,
             patch("ambientweather2sqlite.daemon.insert_observation") as mock_insert,
         ):
@@ -1101,7 +1119,7 @@ class TestStartDaemon(TestCase):
                 return_value=({}, {}),
             ),
             patch(
-                "ambientweather2sqlite.daemon.mureq.get",
+                "ambientweather2sqlite.station_http.mureq.get",
                 side_effect=HTTPException("live data down"),
             ),
             patch("ambientweather2sqlite.daemon.wait_for_next_update") as mock_wait,
@@ -1244,7 +1262,7 @@ class TestCollectForeverStaleDedup(TestCase):
         waits.append(KeyboardInterrupt)
         with (
             patch("builtins.print"),
-            patch("ambientweather2sqlite.daemon.mureq.get", side_effect=bodies),
+            patch("ambientweather2sqlite.station_http.mureq.get", side_effect=bodies),
             patch("ambientweather2sqlite.daemon._refresh_metadata"),
             patch(
                 "ambientweather2sqlite.database.writes._current_observation_timestamp",
@@ -1330,7 +1348,9 @@ class TestStartDaemonStaleDedup(TestCase):
                 "ambientweather2sqlite.daemon.create_metadata",
                 return_value=({}, {}),
             ),
-            patch("ambientweather2sqlite.daemon.mureq.get", return_value="<html />"),
+            patch(
+                "ambientweather2sqlite.station_http.mureq.get", return_value="<html />"
+            ),
             patch(
                 "ambientweather2sqlite.daemon.extract_values",
                 side_effect=values_side_effect,

@@ -58,6 +58,10 @@ AW_UNIT_TO_PINT_UNIT: dict[str, str] = {
     "°": "angular_degree",
 }
 
+_AW_UNIT_BY_LOWERCASE: dict[str, str] = {
+    aw_unit.lower(): aw_unit for aw_unit in AW_UNIT_TO_PINT_UNIT
+}
+
 
 # Pint unit names back to the station's raw unit strings (values are unique).
 PINT_UNIT_TO_AW_UNIT: dict[str, str] = {
@@ -95,6 +99,7 @@ def units_for_columns(
             continue
         if (raw_unit := units.get(unit)) is None:
             continue
+        raw_unit = _AW_UNIT_BY_LOWERCASE.get(raw_unit.lower(), raw_unit)
         if rate:
             raw_unit = _RAIN_UNIT_TO_RATE_UNIT.get(raw_unit, raw_unit)
         column_to_unit[column] = AW_UNIT_TO_PINT_UNIT.get(raw_unit, raw_unit)

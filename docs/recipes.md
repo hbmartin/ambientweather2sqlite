@@ -112,7 +112,8 @@ unrecognized, or incompatible units are
 published as generic sensors without a device class or unit.
 
 After updating the collector, restart it while the station is reachable.
-Successful startup refreshes stored metadata and republishes discovery.
+Successful startup refreshes stored metadata and republishes discovery when
+`[mqtt] discovery = true` is configured.
 Running `aw2sqlite metadata` beforehand is optional; it refreshes metadata
 without restarting the collector and does not republish discovery.
 Discovery topics, unique IDs, and numeric readings remain the same.
@@ -124,7 +125,9 @@ Follow the
 If historical readings were already rates with an incorrect accumulation unit
 label, update the old statistics' unit without converting their values.
 
-Solar discovery follows the station's selected unit:
+Solar discovery follows the station's selected unit.
+Supported station options are recognized case-insensitively; `W/m2`, `LUX`, and
+`FC` produce the same attributes as the canonical spellings below:
 
 | Station unit | Metadata unit | Home Assistant device class | Home Assistant unit |
 | --- | --- | --- | --- |
@@ -148,6 +151,15 @@ Home Assistant statistics.
 `/health` returns `503` once the most recent observation is older than 180
 seconds, so any check that treats non-2xx as failure will catch stalled
 collection without custom parsing.
+
+Health requests can proceed while `GET /` waits or retries against the receiver.
+The embedded collection monitor separately defaults to a 300-second outage
+threshold; an existing stale database alerts immediately after restart, while
+an empty database receives startup grace. Valid unchanged pages reset network
+failure counters but do not establish stored-data recovery. See
+[API health semantics](api.md#get-health-health-check) and the
+[collection monitor](https://github.com/hbmartin/ambientweather2sqlite#embedded-collection-recovery-monitor)
+for verified recovery, rejected timestamps, and bounded shutdown behavior.
 
 Container healthcheck:
 
@@ -222,13 +234,18 @@ The command does not republish Home Assistant discovery. Offline regeneration ex
 with status 1 and preserves an existing sidecar if the database contains no
 stored sensor metadata.
 
+Recognized station-unit options are normalized case-insensitively to canonical
+display spellings and existing Pint units, such as `W/m2` to `w/m2` and
+`DEGC` to `degC`. Unknown strings are preserved exactly, and observations are
+not converted.
+
 For existing rainfall metadata, an online refresh corrects rate fields to
 `inch / hour` or `millimeter / hour` and leaves accumulated rainfall in `inch`
 or `millimeter`. Offline regeneration only exports stored labels and units;
 it preserves corrected metadata after an online refresh but does not correct
-older metadata by itself. Successful collector startup also refreshes stored
-metadata and republishes Home Assistant discovery while the station is reachable,
-so a separate online refresh before restarting is optional.
+older metadata by itself. Collector startup also refreshes metadata while the
+station is reachable and republishes discovery when `[mqtt] discovery = true`
+is configured. See [Home Assistant](#home-assistant) for startup and upgrade guidance.
 
 ## Ad-hoc analysis
 

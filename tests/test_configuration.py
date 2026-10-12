@@ -3,9 +3,12 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
+from hypothesis import given
+from hypothesis import strategies as st
+
 from ambientweather2sqlite import configuration
 from ambientweather2sqlite.configuration import load_config
-from ambientweather2sqlite.models import RecoveryConfig
+from ambientweather2sqlite.models import AppConfig, RecoveryConfig
 
 
 class TestRecoveryConfiguration(TestCase):
@@ -656,3 +659,46 @@ class TestConfiguration(TestCase):
             'live_data_url = "http://127.0.0.1/livedata.htm"\n'
             f'database_path = "{current_path / "aw2sqlite.db"}"\n',
         )
+
+
+class TestPositiveIntegerInvariant(TestCase):
+    def _load(self, section: str, value: str) -> AppConfig:
+        key = "stale_seconds" if section == "recovery" else "failure_threshold"
+        extra = 'webhook_url = "http://hooks.invalid/"\n' if section == "alerts" else ""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(
+                'live_data_url = "http://station/livedata.htm"\n'
+                'database_path = "/tmp/weather.db"\n'
+                f"[{section}]\n{extra}{key} = {value}\n",
+                encoding="utf-8",
+            )
+            return load_config(path)
+
+    @given(
+        section=st.sampled_from(("alerts", "rediscovery", "recovery")),
+        value=st.integers(min_value=-100, max_value=10000),
+    )
+    def test_positive_settings_accept_exactly_positive_integers(
+        self,
+        section: str,
+        value: int,
+    ) -> None:
+        key = "stale_seconds" if section == "recovery" else "failure_threshold"
+        if value < 1:
+            with self.assertRaisesRegex(
+                ValueError, rf"{section}\.{key} must be at least 1"
+            ):
+                self._load(section, str(value))
+        else:
+            table = getattr(self._load(section, str(value)), section)
+            self.assertEqual(getattr(table, key), value)
+
+    def test_boolean_settings_keep_existing_type_error_messages(self) -> None:
+        for section in ("alerts", "rediscovery", "recovery"):
+            key = "stale_seconds" if section == "recovery" else "failure_threshold"
+            with (
+                self.subTest(section=section),
+                self.assertRaisesRegex(TypeError, f"{key} must be an integer"),
+            ):
+                self._load(section, "true")
