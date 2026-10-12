@@ -72,7 +72,7 @@ def match_label_unit(label: str) -> Units | None:
     """
     normalized_label = label.lower()
     for substr, unit in LABEL_TO_UNIT.items():
-        if substr in normalized_label:
+        if substr.lower() in normalized_label:
             return unit
     return None
 

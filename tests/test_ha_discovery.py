@@ -1,5 +1,6 @@
 import json
 from unittest import TestCase
+from unittest.mock import patch
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -7,6 +8,7 @@ from hypothesis import strategies as st
 from ambientweather2sqlite.ha_discovery import build_discovery_messages
 from ambientweather2sqlite.models import MqttConfig
 from ambientweather2sqlite.units_mapping import (
+    LABEL_TO_UNIT,
     Units,
     match_label_unit,
     units_for_columns,
@@ -44,6 +46,116 @@ def _messages_by_column() -> dict[str, tuple[str, dict]]:
 
 
 class TestBuildDiscoveryMessages(TestCase):
+    def test_solar_discovery_pairs_supported_units_without_changing_metadata(
+        self,
+    ) -> None:
+        for unit, device_class, ha_unit in (
+            ("w/m2", "irradiance", "W/m²"),
+            ("watt / meter ** 2", "irradiance", "W/m²"),
+            ("lux", "illuminance", "lx"),
+            ("fc", None, "fc"),
+            ("lumen / foot ** 2", None, "fc"),
+        ):
+            for label in ("Solar Radiation", f"Solar Radiation ({unit})"):
+                with self.subTest(unit=unit, label=label):
+                    labels = {"solarrad": label}
+                    units = {"solarrad": unit}
+                    original_labels = labels.copy()
+                    original_units = units.copy()
+                    messages = build_discovery_messages(labels, units, _CONFIG)
+                    self.assertEqual(len(messages), 1)
+                    topic, body = messages[0]
+                    payload = json.loads(body)
+                    self.assertEqual(labels, original_labels)
+                    self.assertEqual(units, original_units)
+                    self.assertEqual(
+                        topic,
+                        "homeassistant/sensor/aw2sqlite_aw2sqlite/solarrad/config",
+                    )
+                    self.assertEqual(payload["name"], "Solar Radiation")
+                    self.assertEqual(
+                        payload["unique_id"], "aw2sqlite_aw2sqlite_solarrad"
+                    )
+                    self.assertEqual(payload["state_topic"], _CONFIG.topic)
+                    self.assertEqual(
+                        payload["value_template"], "{{ value_json.solarrad }}"
+                    )
+                    self.assertEqual(payload["state_class"], "measurement")
+                    self.assertEqual(payload["unit_of_measurement"], ha_unit)
+                    if device_class is None:
+                        self.assertNotIn("device_class", payload)
+                        self.assertNotEqual(payload["unit_of_measurement"], "lx")
+                    else:
+                        self.assertEqual(payload["device_class"], device_class)
+
+    def test_unrecognized_solar_units_produce_generic_sensors(self) -> None:
+        labels = {"solarrad": "Solar Radiation"}
+        for unit in (
+            None,
+            "unknown",
+            "in",
+            "inch",
+            "degF",
+            "fahrenheit",
+            "%",
+            "percent",
+        ):
+            with self.subTest(unit=unit):
+                units = {} if unit is None else {"solarrad": unit}
+                original_units = units.copy()
+                messages = build_discovery_messages(labels, units, _CONFIG)
+                self.assertEqual(len(messages), 1)
+                payload = json.loads(messages[0][1])
+                self.assertNotIn("device_class", payload)
+                self.assertNotIn("unit_of_measurement", payload)
+                self.assertEqual(payload["name"], "Solar Radiation")
+                self.assertEqual(payload["unique_id"], "aw2sqlite_aw2sqlite_solarrad")
+                self.assertEqual(payload["value_template"], "{{ value_json.solarrad }}")
+                self.assertEqual(payload["state_class"], "measurement")
+                self.assertEqual(units, original_units)
+
+    @given(
+        unit=st.one_of(
+            st.none(),
+            st.sampled_from(
+                ("w/m2", "watt / meter ** 2", "lux", "fc", "lumen / foot ** 2")
+            ),
+            st.text(),
+        ),
+    )
+    def test_solar_discovery_always_uses_valid_pairs(self, unit: str | None) -> None:
+        labels = {"solarrad": "Solar Radiation"}
+        units = {} if unit is None else {"solarrad": unit}
+        original_units = units.copy()
+        messages = build_discovery_messages(labels, units, _CONFIG)
+        self.assertEqual(len(messages), 1)
+        payload = json.loads(messages[0][1])
+        self.assertIn(
+            (payload.get("device_class"), payload.get("unit_of_measurement")),
+            {
+                ("irradiance", "W/m²"),
+                ("illuminance", "lx"),
+                (None, "fc"),
+                (None, None),
+            },
+        )
+        if payload.get("device_class") is None:
+            self.assertNotIn("device_class", payload)
+        if payload.get("unit_of_measurement") is None:
+            self.assertNotIn("unit_of_measurement", payload)
+        self.assertEqual(units, original_units)
+
+    def test_generic_foot_candle_sensor_preserves_native_units(self) -> None:
+        for unit in ("fc", "lumen / foot ** 2"):
+            with self.subTest(unit=unit):
+                messages = build_discovery_messages(
+                    {"light": "Light Level"}, {"light": unit}, _CONFIG
+                )
+                payload = json.loads(messages[0][1])
+                self.assertEqual(payload["unit_of_measurement"], "fc")
+                self.assertNotIn("device_class", payload)
+                self.assertEqual(payload["value_template"], "{{ value_json.light }}")
+
     def test_rain_rate_discovery_uses_intensity_and_retains_sensor_identity(
         self,
     ) -> None:
@@ -251,6 +363,20 @@ class TestBuildDiscoveryMessages(TestCase):
 
 
 class TestMatchLabelUnit(TestCase):
+    def test_mixed_case_keys_preserve_match_precedence(self) -> None:
+        with patch.dict(
+            LABEL_TO_UNIT,
+            {
+                "WindDir": Units.WIND_DIRECTION,
+                "WIND": Units.WIND,
+                "Solar": Units.SOLAR_RADIATION,
+            },
+            clear=True,
+        ):
+            self.assertEqual(match_label_unit("WINDDIR (°)"), Units.WIND_DIRECTION)
+            self.assertEqual(match_label_unit("Wind Speed"), Units.WIND)
+            self.assertEqual(match_label_unit("SOLAR RADIATION"), Units.SOLAR_RADIATION)
+
     def test_winddir_matches_before_wind(self):
         self.assertEqual(match_label_unit("WindDir (°)"), Units.WIND_DIRECTION)
         self.assertEqual(match_label_unit("Wind Speed"), Units.WIND)
