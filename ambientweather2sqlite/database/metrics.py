@@ -78,14 +78,16 @@ def query_latest_timestamp(db_path: str) -> str | None:
 
 def _query_monitor_timestamp(
     db_path: str,
-    now: datetime,
-) -> tuple[str | None, datetime | None, bool]:
+    now: datetime | None = None,
+) -> tuple[str | None, datetime | None, bool, datetime]:
     """Find a usable timestamp without changing public maximum-timestamp queries."""
     rejected = False
     with closing(_connect_database(db_path, read_only=True)) as conn:
         rows = conn.execute(
             f"SELECT {_TS_COL} FROM {_DEFAULT_TABLE_NAME} ORDER BY {_TS_COL} DESC",
         )
+        # execute steps the SELECT and establishes its snapshot before the clock.
+        checked_at = now if now is not None else datetime.now(UTC)
         for (raw,) in rows:
             if isinstance(raw, str):
                 try:
@@ -93,10 +95,10 @@ def _query_monitor_timestamp(
                 except (ValueError, OverflowError):
                     pass
                 else:
-                    if latest <= now:
-                        return raw, latest, rejected
+                    if latest <= checked_at:
+                        return raw, latest, rejected, checked_at
             rejected = True
-    return None, None, rejected
+    return None, None, rejected, checked_at
 
 
 def query_latest_observation(db_path: str) -> Observation | None:

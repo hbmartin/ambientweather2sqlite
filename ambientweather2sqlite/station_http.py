@@ -1,7 +1,7 @@
-"""Serialize HTTP requests to each receiver within one process."""
+"""Serialize HTTP requests by normalized receiver hostname within one process."""
 
 import ipaddress
-import socket
+from http.client import HTTPException
 from threading import Lock
 from urllib.parse import urlsplit
 from weakref import WeakValueDictionary
@@ -13,15 +13,17 @@ _RECEIVER_LOCKS: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 
 
 def _receiver_address(url: str) -> str:
-    host = urlsplit(url).hostname or url
+    parsed = urlsplit(url)
+    host = parsed.hostname
+    # Accessing port validates malformed and out-of-range port strings.
+    _ = parsed.port
+    if host is None:
+        msg = "Receiver URL is missing a hostname"
+        raise ValueError(msg)
     try:
         return str(ipaddress.ip_address(host))
     except (ValueError,):  # noqa: B013
-        try:
-            addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-        except (OSError,):  # noqa: B013
-            return host.casefold()
-        return str(ipaddress.ip_address(addresses[0][4][0]))
+        return host.encode("idna").decode("ascii").lower()
 
 
 def _receiver_lock(url: str) -> Lock:
@@ -40,8 +42,12 @@ def station_get(
     auto_retry: bool = False,
     timeout: float | None = None,
 ) -> str:
-    """Fetch one page, serializing requests and retries to the same receiver."""
-    with _receiver_lock(url):
-        if timeout is None:
-            return mureq.get(url, auto_retry=auto_retry)
-        return mureq.get(url, auto_retry=auto_retry, timeout=timeout)
+    """Fetch one page, serializing requests and retries to the same host key."""
+    try:
+        with _receiver_lock(url):
+            if timeout is None:
+                return mureq.get(url, auto_retry=auto_retry)
+            return mureq.get(url, auto_retry=auto_retry, timeout=timeout)
+    except (ValueError,) as error:  # noqa: B013
+        msg = f"Invalid receiver URL: {error}"
+        raise HTTPException(msg) from error

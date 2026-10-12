@@ -6,7 +6,8 @@ import sqlite3
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Generator, Iterable
+from contextlib import contextmanager
 from datetime import datetime
 from http.client import HTTPException
 from logging.handlers import RotatingFileHandler
@@ -127,19 +128,25 @@ def next_deadline(epoch: float, period_seconds: int, now: float) -> float:
     return epoch + intervals * period_seconds
 
 
-def _install_sigterm_handler() -> None:
-    """Translate SIGTERM into KeyboardInterrupt for a graceful shutdown.
-
-    Signal handlers can only be installed in the main thread; when the daemon
-    runs elsewhere (e.g. under test), termination handling is left unchanged.
-    """
+@contextmanager
+def _sigterm_handler() -> Generator[None]:
+    """Translate SIGTERM into an interrupt while preserving a restorable handler."""
     if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.getsignal(signal.SIGTERM)
+    if previous is None:
+        yield
         return
 
     def _raise_keyboard_interrupt(_signum: int, _frame: FrameType | None) -> None:
         raise KeyboardInterrupt
 
-    signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+    try:
+        signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def fetch_once(live_data_url: str) -> None:
@@ -467,7 +474,6 @@ def _collect_forever(  # noqa: PLR0913
         collection_attempt += 1
         if interactive:
             clear_lines(remove_newlines)
-        remove_newlines = 0
         body, live_data, remove_newlines = _fetch_receiver_page(
             live_data_url,
             logger,
@@ -559,15 +565,15 @@ def start_daemon(  # noqa: PLR0913
         if alert_config is not None
         else None
     )
-    main_thread = threading.current_thread() is threading.main_thread()
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
     try:
-        _install_sigterm_handler()
-        with monitor_collection(
-            database_path,
-            recovery_config,
-            logger,
-            notifier.collection_event if notifier is not None else None,
+        with (
+            _sigterm_handler(),
+            monitor_collection(
+                database_path,
+                recovery_config,
+                logger,
+                notifier.collection_event if notifier is not None else None,
+            ),
         ):
             _serve_station(
                 live_data_url,
@@ -585,9 +591,6 @@ def start_daemon(  # noqa: PLR0913
     except (KeyboardInterrupt,):
         print(f"\nStopping... results saved to {database_path}")
         sys.exit(0)
-    finally:
-        if main_thread:
-            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def _serve_station(  # noqa: PLR0913

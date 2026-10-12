@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.client import HTTPException
 from typing import TYPE_CHECKING
@@ -29,6 +29,7 @@ class AlertNotifier:
     logger: logging.Logger
     consecutive_failures: int = 0
     alert_sent: bool = False
+    _pending_failure_peak: int = field(default=0, init=False)
 
     def record_failure(self) -> None:
         """Count a failed fetch, firing station_offline at the threshold."""
@@ -38,24 +39,40 @@ class AlertNotifier:
             and self.consecutive_failures >= self.config.failure_threshold
         ):
             self.alert_sent = True
+            self._remember_failure_peak()
             self._post("station_offline")
+        else:
+            self._remember_failure_peak()
+
+    def _remember_failure_peak(self) -> None:
+        if self.alert_sent:
+            self._pending_failure_peak = max(
+                self._pending_failure_peak, self.consecutive_failures
+            )
 
     def record_fetch_success(self) -> None:
         """Reset fetch failures without declaring stored-data recovery."""
+        self._remember_failure_peak()
         self.consecutive_failures = 0
 
     def record_success(self) -> None:
         """Reset the failure count, firing station_online after an outage."""
         if self.alert_sent:
+            self._remember_failure_peak()
             self._post("station_online")
         self.consecutive_failures = 0
         self.alert_sent = False
+        self._pending_failure_peak = 0
 
     def _post(self, event: str) -> None:
         payload: dict[str, object] = {
             "event": event,
             "station_url": self.station_url,
-            "consecutive_failures": self.consecutive_failures,
+            "consecutive_failures": (
+                self._pending_failure_peak
+                if event == "station_online"
+                else self.consecutive_failures
+            ),
             "timestamp": datetime.now(UTC).isoformat(),
         }
         self._send(payload)
