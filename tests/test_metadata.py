@@ -23,6 +23,7 @@ from ambientweather2sqlite.metadata import (
 )
 from ambientweather2sqlite.models import MqttConfig
 from ambientweather2sqlite.units_mapping import Units
+from tests.discovery_helpers import assert_sensor_identity
 
 
 class TestMetadata(TestCase):
@@ -36,10 +37,14 @@ class TestMetadata(TestCase):
             '<input name="solarrad" disabled value="105.98"></td></tr></table>'
         )
         config = MqttConfig(host="broker.local", topic="weather/observations")
-        for raw, pint_unit, device_class, ha_unit in (
-            ("w/m2", "watt / meter ** 2", "irradiance", "W/m²"),
-            ("lux", "lux", "illuminance", "lx"),
-            ("fc", "lumen / foot ** 2", None, "fc"),
+        for raw, canonical, pint_unit, device_class, ha_unit in (
+            ("w/m2", "w/m2", "watt / meter ** 2", "irradiance", "W/m²"),
+            ("W/m2", "w/m2", "watt / meter ** 2", "irradiance", "W/m²"),
+            ("W/M2", "w/m2", "watt / meter ** 2", "irradiance", "W/m²"),
+            ("lux", "lux", "lux", "illuminance", "lx"),
+            ("LuX", "lux", "lux", "illuminance", "lx"),
+            ("fc", "fc", "lumen / foot ** 2", None, "fc"),
+            ("FC", "fc", "lumen / foot ** 2", None, "fc"),
         ):
             with self.subTest(unit=raw), tempfile.TemporaryDirectory() as temp_dir:
                 db_path = str(Path(temp_dir) / "weather.db")
@@ -54,7 +59,7 @@ class TestMetadata(TestCase):
                     f"<option selected>{raw}</option></select>",
                 ]
                 labels, units = create_metadata(db_path, "http://station/livedata.htm")
-                self.assertEqual(labels, {"solarrad": f"Solar Radiation ({raw})"})
+                self.assertEqual(labels, {"solarrad": f"Solar Radiation ({canonical})"})
                 self.assertEqual(units, {"solarrad": pint_unit})
                 stored = {row[0]: row[3] for row in query_sensor_metadata(db_path)}
                 self.assertEqual(stored["solarrad"], pint_unit)
@@ -62,16 +67,13 @@ class TestMetadata(TestCase):
                 self.assertEqual(len(messages), 1)
                 topic, body = messages[0]
                 payload = json.loads(body)
-                self.assertEqual(
-                    topic, "homeassistant/sensor/aw2sqlite_aw2sqlite/solarrad/config"
-                )
+                assert_sensor_identity(self, "solarrad", topic, payload, config)
                 self.assertEqual(payload["name"], "Solar Radiation")
                 self.assertEqual(payload["unit_of_measurement"], ha_unit)
                 if device_class is None:
                     self.assertNotIn("device_class", payload)
                 else:
                     self.assertEqual(payload["device_class"], device_class)
-                self.assertEqual(payload["value_template"], "{{ value_json.solarrad }}")
                 self.assertEqual(units, {"solarrad": pint_unit})
                 path = metadata_path(db_path)
                 original = json.loads(path.read_text())
@@ -99,7 +101,13 @@ class TestMetadata(TestCase):
             "<tr><td>Calibrated Rainfall</td><td>"
             '<input name="eventrain" disabled value="0.02"></td></tr></table>'
         )
-        for raw, length in (("in", "inch"), ("mm", "millimeter")):
+        config = MqttConfig(host="broker.local", topic="weather/observations")
+        for raw, canonical, length in (
+            ("in", "in", "inch"),
+            ("iN", "in", "inch"),
+            ("mm", "mm", "millimeter"),
+            ("MM", "mm", "millimeter"),
+        ):
             with self.subTest(unit=raw), tempfile.TemporaryDirectory() as temp_dir:
                 db_path = str(Path(temp_dir) / "weather.db")
                 create_database_if_not_exists(db_path)
@@ -122,13 +130,33 @@ class TestMetadata(TestCase):
                     f"<option selected>{raw}</option></select>",
                 ]
                 labels, units = create_metadata(db_path, "http://station/livedata.htm")
-                self.assertEqual(labels["rainofhourly"], f"Hourly Rain Rate ({raw}/hr)")
+                self.assertEqual(
+                    labels["rainofhourly"], f"Hourly Rain Rate ({canonical}/hr)"
+                )
                 self.assertEqual(units["rainofhourly"], f"{length} / hour")
-                self.assertEqual(labels["eventrain"], f"Calibrated Rainfall ({raw})")
+                self.assertEqual(
+                    labels["eventrain"], f"Calibrated Rainfall ({canonical})"
+                )
                 self.assertEqual(units["eventrain"], length)
                 stored = {row[0]: row[3] for row in query_sensor_metadata(db_path)}
                 self.assertEqual(stored["rainofhourly"], f"{length} / hour")
                 self.assertEqual(stored["eventrain"], length)
+                messages = build_discovery_messages(labels, units, config)
+                self.assertEqual(len(messages), 2)
+                for topic, body in messages:
+                    column = topic.split("/")[-2]
+                    payload = json.loads(body)
+                    assert_sensor_identity(self, column, topic, payload, config)
+                    if column == "rainofhourly":
+                        self.assertEqual(
+                            payload["device_class"], "precipitation_intensity"
+                        )
+                        self.assertEqual(
+                            payload["unit_of_measurement"], f"{canonical}/h"
+                        )
+                    else:
+                        self.assertEqual(payload["device_class"], "precipitation")
+                        self.assertEqual(payload["unit_of_measurement"], canonical)
                 with closing(sqlite3.connect(db_path)) as conn:
                     self.assertEqual(
                         conn.execute(

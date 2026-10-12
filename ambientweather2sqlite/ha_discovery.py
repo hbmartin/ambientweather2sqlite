@@ -37,6 +37,10 @@ AW_UNIT_TO_HA_UNIT: dict[str, str] = {
     "°": "°",
 }
 
+_AW_UNIT_TO_HA_UNIT_LOWERCASE: dict[str, str] = {
+    aw_unit.lower(): ha_unit for aw_unit, ha_unit in AW_UNIT_TO_HA_UNIT.items()
+}
+
 # Unit categories to Home Assistant device_class values; None where HA has
 # no matching device class (wind direction).
 UNIT_TO_DEVICE_CLASS: dict[Units, str | None] = {
@@ -61,7 +65,7 @@ def _ha_unit(column: str, column_to_unit: ColumnUnitMap) -> str | None:
     if pint_unit is None:
         return None
     aw_unit = PINT_UNIT_TO_AW_UNIT.get(pint_unit, pint_unit)
-    return AW_UNIT_TO_HA_UNIT.get(aw_unit)
+    return _AW_UNIT_TO_HA_UNIT_LOWERCASE.get(aw_unit.lower())
 
 
 def _rain_sensor_attributes(ha_unit: str | None, *, rate: bool) -> dict[str, str]:

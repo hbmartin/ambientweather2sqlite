@@ -1,6 +1,72 @@
 from unittest import TestCase
 
-from ambientweather2sqlite.units_mapping import Units, is_rain_rate, units_for_columns
+from hypothesis import given
+from hypothesis import strategies as st
+
+from ambientweather2sqlite.units_mapping import (
+    AW_UNIT_TO_PINT_UNIT,
+    PINT_UNIT_TO_AW_UNIT,
+    Units,
+    is_rain_rate,
+    units_for_columns,
+)
+
+
+class TestStationUnitCasing(TestCase):
+    def test_supported_options_use_canonical_spellings_and_pint_units(self) -> None:
+        original_map = AW_UNIT_TO_PINT_UNIT.copy()
+        original_inverse = PINT_UNIT_TO_AW_UNIT.copy()
+        for canonical, pint_unit in AW_UNIT_TO_PINT_UNIT.items():
+            mixed_case = "".join(
+                char.upper() if index % 2 else char.lower()
+                for index, char in enumerate(canonical)
+            )
+            for raw in (canonical, canonical.lower(), canonical.upper(), mixed_case):
+                with self.subTest(unit=raw):
+                    labels = {"solarrad": "Solar Radiation"}
+                    station_units = {Units.SOLAR_RADIATION: raw}
+                    self.assertEqual(
+                        units_for_columns(labels, station_units),
+                        (
+                            {"solarrad": f"Solar Radiation ({canonical})"},
+                            {"solarrad": pint_unit},
+                        ),
+                    )
+                    self.assertEqual(labels, {"solarrad": "Solar Radiation"})
+                    self.assertEqual(station_units, {Units.SOLAR_RADIATION: raw})
+        self.assertEqual(AW_UNIT_TO_PINT_UNIT, original_map)
+        self.assertEqual(PINT_UNIT_TO_AW_UNIT, original_inverse)
+
+    @given(
+        canonical=st.sampled_from(tuple(AW_UNIT_TO_PINT_UNIT)),
+        uppercase=st.integers(min_value=0),
+    )
+    def test_capitalization_preserves_metadata(
+        self, canonical: str, uppercase: int
+    ) -> None:
+        raw = "".join(
+            char.upper() if uppercase & (1 << index) else char.lower()
+            for index, char in enumerate(canonical)
+        )
+        labels = {"sensor": "Solar Radiation"}
+        self.assertEqual(
+            units_for_columns(labels, {Units.SOLAR_RADIATION: raw}),
+            units_for_columns(labels, {Units.SOLAR_RADIATION: canonical}),
+        )
+
+    def test_unknown_options_preserve_the_original_string(self) -> None:
+        for raw in ("UnknownUnit", "W/m3", "DEGK", "WATT / METER ** 2"):
+            with self.subTest(unit=raw):
+                self.assertEqual(
+                    units_for_columns(
+                        {"solarrad": "Solar Radiation"},
+                        {Units.SOLAR_RADIATION: raw},
+                    ),
+                    (
+                        {"solarrad": f"Solar Radiation ({raw})"},
+                        {"solarrad": raw},
+                    ),
+                )
 
 
 class TestRainUnits(TestCase):
@@ -68,6 +134,25 @@ class TestRainUnits(TestCase):
         )
         self.assertEqual(labels, {"rainofhourly": "Intensity (in/hr)"})
         self.assertEqual(units, {"rainofhourly": "inch / hour"})
+
+    def test_capitalized_rain_options_normalize_before_rate_mapping(self) -> None:
+        for raw, rate_raw, pint_rate, total_raw, pint_total in (
+            ("IN", "in/hr", "inch / hour", "in", "inch"),
+            ("Mm", "mm/hr", "millimeter / hour", "mm", "millimeter"),
+            ("IN/HR", "in/hr", "inch / hour", "in/hr", "inch / hour"),
+            ("mM/hR", "mm/hr", "millimeter / hour", "mm/hr", "millimeter / hour"),
+        ):
+            with self.subTest(unit=raw):
+                labels, units = units_for_columns(
+                    {"rainofhourly": "Intensity", "eventrain": "Calibrated Rainfall"},
+                    {Units.RAINFALL: raw},
+                )
+                self.assertEqual(labels["rainofhourly"], f"Intensity ({rate_raw})")
+                self.assertEqual(units["rainofhourly"], pint_rate)
+                self.assertEqual(
+                    labels["eventrain"], f"Calibrated Rainfall ({total_raw})"
+                )
+                self.assertEqual(units["eventrain"], pint_total)
 
     def test_missing_rain_unit_stays_unknown(self) -> None:
         sensors = {"rainofhourly": "Hourly Rain Rate"}

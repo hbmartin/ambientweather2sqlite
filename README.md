@@ -253,6 +253,11 @@ embedded in the database—useful after restoring a backup. If the database has
 no stored sensor metadata, the command exits with status 1 and leaves any
 existing sidecar unchanged.
 
+Supported station-unit options are recognized case-insensitively: `W/m2` and
+`DEGC`, for example, use the canonical display spellings `w/m2` and `degC` and
+their existing Pint metadata units. Unknown unit strings are preserved as given.
+This normalization does not convert observations.
+
 For the station's `in` and `mm` rainfall settings, rate fields (`rainofhourly`
 or a field explicitly labeled **Rain Rate** or **Rainfall Rate**) use
 `inch / hour` or `millimeter / hour` in stored metadata and `in/hr` or `mm/hr`
@@ -260,11 +265,11 @@ in display labels. Matching is case-insensitive and also accepts forms such as
 **Rain-Rate**, **Rain_Rate**, and **RainRate**. Other rainfall fields, including
 **Hourly Rain** without **Rate** and **Calibrated Rainfall**, retain `inch` or
 `millimeter`. This corrects unit metadata without converting recorded values.
-When the station is reachable, successful collector startup refreshes stored
-metadata and republishes Home Assistant discovery. Run `aw2sqlite metadata`
-separately to refresh labels and units without restarting the collector; the
-command does not republish discovery. Subsequent offline exports preserve the
-stored units. Offline export alone does not correct previously stored units.
+Collector startup also refreshes stored metadata while the station is reachable;
+it republishes discovery when `[mqtt] discovery = true` is configured. See
+[Home Assistant](#home-assistant) for startup and upgrade instructions.
+The metadata command does not republish discovery. Subsequent offline exports
+preserve stored units; offline export alone does not correct previously stored units.
 
 ### `aw2sqlite install-launchd`
 
@@ -362,9 +367,11 @@ rain totals advertise `precipitation` with `in` or `mm`. Existing discovery
 topics and sensor identifiers are preserved when the collector restarts.
 
 Successful collector startup refreshes stored metadata from the reachable
-station and republishes discovery, so restarting after an upgrade is sufficient.
-Running `aw2sqlite metadata` first is optional. Normal startup supplies corrected
-rain-rate units; the discovery builder also defensively normalizes recognized
+station and republishes discovery when `[mqtt] discovery = true` is configured,
+so restarting after an upgrade is sufficient. Running `aw2sqlite metadata` first
+is optional; it refreshes labels and units without restarting and does not publish
+discovery. Normal startup supplies corrected rain-rate units; the discovery
+builder also defensively normalizes recognized
 length units to hourly units when supplied with older rate metadata.
 Rainfall sensors with missing, unrecognized, or incompatible units are published
 as generic sensors without a device class or unit; their readings still use the
@@ -378,7 +385,9 @@ If historical readings already represented a rate and only their unit label was
 wrong, choose the option to update the old statistics' unit without converting
 their values.
 
-Solar sensors use the station's selected unit to choose their discovery class:
+Solar sensors use the station's selected unit to choose their discovery class.
+Supported station options are case-insensitive, so `W/m2`, `LUX`, and `FC`
+produce the same discovery attributes as the canonical spellings below:
 
 | Station unit | Metadata unit | Home Assistant device class | Home Assistant unit |
 | --- | --- | --- | --- |

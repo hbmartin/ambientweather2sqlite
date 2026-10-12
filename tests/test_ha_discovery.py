@@ -8,11 +8,13 @@ from hypothesis import strategies as st
 from ambientweather2sqlite.ha_discovery import build_discovery_messages
 from ambientweather2sqlite.models import MqttConfig
 from ambientweather2sqlite.units_mapping import (
+    AW_UNIT_TO_PINT_UNIT,
     LABEL_TO_UNIT,
     Units,
     match_label_unit,
     units_for_columns,
 )
+from tests.discovery_helpers import assert_sensor_identity
 
 _CONFIG = MqttConfig(
     host="broker.local",
@@ -35,6 +37,29 @@ _COLUMN_TO_UNIT = {
     "AbsPress": "1e2 * pascal",
 }
 
+_STATION_SENSOR_UNITS = (
+    ("Wind Speed", "m/s", "wind_speed", "m/s"),
+    ("Wind Speed", "km/h", "wind_speed", "km/h"),
+    ("Wind Speed", "ft/s", "wind_speed", "ft/s"),
+    ("Wind Speed", "mph", "wind_speed", "mph"),
+    ("Wind Speed", "knot", "wind_speed", "kn"),
+    ("Calibrated Rainfall", "mm", "precipitation", "mm"),
+    ("Calibrated Rainfall", "in", "precipitation", "in"),
+    ("Rain Rate", "in/hr", "precipitation_intensity", "in/h"),
+    ("Rain Rate", "mm/hr", "precipitation_intensity", "mm/h"),
+    ("Absolute Pressure", "hpa", "pressure", "hPa"),
+    ("Absolute Pressure", "inhg", "pressure", "inHg"),
+    ("Absolute Pressure", "mmhg", "pressure", "mmHg"),
+    ("Outdoor Temperature", "degC", "temperature", "°C"),
+    ("Outdoor Temperature", "degF", "temperature", "°F"),
+    ("Solar Radiation", "lux", "illuminance", "lx"),
+    ("Solar Radiation", "w/m2", "irradiance", "W/m²"),
+    ("Solar Radiation", "fc", None, "fc"),
+    ("PM2.5", "ug/m3", "pm25", "µg/m³"),
+    ("Outdoor Humidity", "%", "humidity", "%"),
+    ("WindDir", "°", None, "°"),
+)
+
 
 def _messages_by_column() -> dict[str, tuple[str, dict]]:
     messages = build_discovery_messages(_LABELS, _COLUMN_TO_UNIT, _CONFIG)
@@ -46,6 +71,76 @@ def _messages_by_column() -> dict[str, tuple[str, dict]]:
 
 
 class TestBuildDiscoveryMessages(TestCase):
+    def test_supported_unit_casing_and_pint_names_retain_exact_pairs(self) -> None:
+        for label, canonical, device_class, ha_unit in _STATION_SENSOR_UNITS:
+            mixed_case = "".join(
+                char.upper() if index % 2 else char.lower()
+                for index, char in enumerate(canonical)
+            )
+            for unit in (
+                canonical,
+                canonical.lower(),
+                canonical.upper(),
+                mixed_case,
+                AW_UNIT_TO_PINT_UNIT[canonical],
+            ):
+                with self.subTest(label=label, unit=unit):
+                    labels = {"sensor": f"{label} ({unit})"}
+                    units = {"sensor": unit}
+                    original_labels = labels.copy()
+                    original_units = units.copy()
+                    topic, body = build_discovery_messages(labels, units, _CONFIG)[0]
+                    payload = json.loads(body)
+                    assert_sensor_identity(self, "sensor", topic, payload, _CONFIG)
+                    self.assertEqual(payload["name"], label)
+                    self.assertEqual(payload["unit_of_measurement"], ha_unit)
+                    if device_class is None:
+                        self.assertNotIn("device_class", payload)
+                    else:
+                        self.assertEqual(payload["device_class"], device_class)
+                    self.assertEqual(labels, original_labels)
+                    self.assertEqual(units, original_units)
+
+    @given(
+        sensor=st.sampled_from(_STATION_SENSOR_UNITS),
+        uppercase=st.integers(min_value=0),
+    )
+    def test_station_unit_capitalization_preserves_discovery(
+        self, sensor: tuple[str, str, str | None, str], uppercase: int
+    ) -> None:
+        label, canonical, _device_class, _ha_unit = sensor
+        raw = "".join(
+            char.upper() if uppercase & (1 << index) else char.lower()
+            for index, char in enumerate(canonical)
+        )
+        labels = {"sensor": label}
+        units = {"sensor": raw}
+        self.assertEqual(
+            build_discovery_messages(labels, units, _CONFIG),
+            build_discovery_messages(labels, {"sensor": canonical}, _CONFIG),
+        )
+        self.assertEqual(units, {"sensor": raw})
+
+    def test_unknown_units_and_pint_expressions_are_not_case_normalized(self) -> None:
+        for unit in (
+            "UnknownUnit",
+            "W/m3",
+            "WATT / METER ** 2",
+            "LUMEN / FOOT ** 2",
+            "CELSIUS",
+            "inch_hg",
+        ):
+            with self.subTest(unit=unit):
+                units = {"solarrad": unit}
+                topic, body = build_discovery_messages(
+                    {"solarrad": "Solar Radiation"}, units, _CONFIG
+                )[0]
+                payload = json.loads(body)
+                assert_sensor_identity(self, "solarrad", topic, payload, _CONFIG)
+                self.assertNotIn("device_class", payload)
+                self.assertNotIn("unit_of_measurement", payload)
+                self.assertEqual(units, {"solarrad": unit})
+
     def test_solar_discovery_pairs_supported_units_without_changing_metadata(
         self,
     ) -> None:
@@ -68,23 +163,11 @@ class TestBuildDiscoveryMessages(TestCase):
                     payload = json.loads(body)
                     self.assertEqual(labels, original_labels)
                     self.assertEqual(units, original_units)
-                    self.assertEqual(
-                        topic,
-                        "homeassistant/sensor/aw2sqlite_aw2sqlite/solarrad/config",
-                    )
+                    assert_sensor_identity(self, "solarrad", topic, payload, _CONFIG)
                     self.assertEqual(payload["name"], "Solar Radiation")
-                    self.assertEqual(
-                        payload["unique_id"], "aw2sqlite_aw2sqlite_solarrad"
-                    )
-                    self.assertEqual(payload["state_topic"], _CONFIG.topic)
-                    self.assertEqual(
-                        payload["value_template"], "{{ value_json.solarrad }}"
-                    )
-                    self.assertEqual(payload["state_class"], "measurement")
                     self.assertEqual(payload["unit_of_measurement"], ha_unit)
                     if device_class is None:
                         self.assertNotIn("device_class", payload)
-                        self.assertNotEqual(payload["unit_of_measurement"], "lx")
                     else:
                         self.assertEqual(payload["device_class"], device_class)
 
@@ -105,13 +188,12 @@ class TestBuildDiscoveryMessages(TestCase):
                 original_units = units.copy()
                 messages = build_discovery_messages(labels, units, _CONFIG)
                 self.assertEqual(len(messages), 1)
-                payload = json.loads(messages[0][1])
+                topic, body = messages[0]
+                payload = json.loads(body)
+                assert_sensor_identity(self, "solarrad", topic, payload, _CONFIG)
                 self.assertNotIn("device_class", payload)
                 self.assertNotIn("unit_of_measurement", payload)
                 self.assertEqual(payload["name"], "Solar Radiation")
-                self.assertEqual(payload["unique_id"], "aw2sqlite_aw2sqlite_solarrad")
-                self.assertEqual(payload["value_template"], "{{ value_json.solarrad }}")
-                self.assertEqual(payload["state_class"], "measurement")
                 self.assertEqual(units, original_units)
 
     @given(
@@ -129,7 +211,9 @@ class TestBuildDiscoveryMessages(TestCase):
         original_units = units.copy()
         messages = build_discovery_messages(labels, units, _CONFIG)
         self.assertEqual(len(messages), 1)
-        payload = json.loads(messages[0][1])
+        topic, body = messages[0]
+        payload = json.loads(body)
+        assert_sensor_identity(self, "solarrad", topic, payload, _CONFIG)
         self.assertIn(
             (payload.get("device_class"), payload.get("unit_of_measurement")),
             {
@@ -176,19 +260,9 @@ class TestBuildDiscoveryMessages(TestCase):
                 }
                 for column in ("rainofhourly", "rate2"):
                     topic, payload = by_column[column]
-                    self.assertEqual(
-                        topic,
-                        f"homeassistant/sensor/aw2sqlite_aw2sqlite/{column}/config",
-                    )
-                    self.assertEqual(
-                        payload["unique_id"], f"aw2sqlite_aw2sqlite_{column}"
-                    )
-                    self.assertEqual(
-                        payload["value_template"], f"{{{{ value_json.{column} }}}}"
-                    )
+                    assert_sensor_identity(self, column, topic, payload, _CONFIG)
                     self.assertEqual(payload["device_class"], "precipitation_intensity")
                     self.assertEqual(payload["unit_of_measurement"], f"{raw}/h")
-                    self.assertEqual(payload["state_class"], "measurement")
                 self.assertEqual(
                     by_column["hourrain"][1]["device_class"], "precipitation"
                 )
@@ -221,18 +295,7 @@ class TestBuildDiscoveryMessages(TestCase):
                 for topic, body in messages:
                     column = topic.split("/")[-2]
                     payload = json.loads(body)
-                    self.assertEqual(
-                        topic,
-                        f"homeassistant/sensor/aw2sqlite_aw2sqlite/{column}/config",
-                    )
-                    self.assertEqual(
-                        payload["unique_id"], f"aw2sqlite_aw2sqlite_{column}"
-                    )
-                    self.assertEqual(
-                        payload["value_template"], f"{{{{ value_json.{column} }}}}"
-                    )
-                    self.assertEqual(payload["state_topic"], _CONFIG.topic)
-                    self.assertEqual(payload["state_class"], "measurement")
+                    assert_sensor_identity(self, column, topic, payload, _CONFIG)
                     if column in {"rainofhourly", "rate2"}:
                         self.assertEqual(
                             payload["device_class"], "precipitation_intensity"
@@ -262,13 +325,7 @@ class TestBuildDiscoveryMessages(TestCase):
                     self.assertNotIn("device_class", payload)
                     self.assertNotIn("unit_of_measurement", payload)
                     self.assertEqual(payload["name"], labels[column])
-                    self.assertEqual(
-                        payload["unique_id"], f"aw2sqlite_aw2sqlite_{column}"
-                    )
-                    self.assertEqual(
-                        payload["value_template"], f"{{{{ value_json.{column} }}}}"
-                    )
-                    self.assertEqual(payload["state_class"], "measurement")
+                    assert_sensor_identity(self, column, topic, payload, _CONFIG)
 
     @given(
         unit=st.one_of(
