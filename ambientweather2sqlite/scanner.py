@@ -9,6 +9,7 @@ from http.client import HTTPException
 
 from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
+from ambientweather2sqlite.station_http import STATION_REQUEST_LOCK
 
 
 def _is_non_loopback_ipv4(address: object) -> bool:
@@ -182,7 +183,8 @@ def probe_weather_station(ip: str) -> str | None:
     """
     url = f"http://{ip}/livedata.htm"
     try:
-        body = mureq.get(url, timeout=3)
+        with STATION_REQUEST_LOCK:
+            body = mureq.get(url, timeout=3)
         values = extract_values(body)
         if values:
             return url

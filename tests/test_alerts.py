@@ -19,6 +19,23 @@ def _make_notifier() -> tuple[AlertNotifier, Mock]:
 
 class TestAlertNotifier(TestCase):
     @patch("ambientweather2sqlite.alerts.mureq.post")
+    def test_collection_events_include_freshness_without_resetting_failures(
+        self,
+        mock_post: Mock,
+    ) -> None:
+        notifier, _ = _make_notifier()
+        notifier.record_failure()
+        for event in ("collection_stalled", "collection_resumed"):
+            notifier.collection_event(event, "2026-10-12 16:00:00", 600.0)
+            payload = mock_post.call_args.kwargs["json"]
+            self.assertEqual(payload["event"], event)
+            self.assertEqual(payload["last_observation_ts"], "2026-10-12 16:00:00")
+            self.assertEqual(payload["age_seconds"], 600.0)
+            self.assertEqual(payload["station_url"], notifier.station_url)
+        self.assertEqual(notifier.consecutive_failures, 1)
+        self.assertFalse(notifier.alert_sent)
+
+    @patch("ambientweather2sqlite.alerts.mureq.post")
     def test_offline_fires_once_at_threshold(self, mock_post: Mock):
         notifier, _ = _make_notifier()
 
