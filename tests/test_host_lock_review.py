@@ -127,6 +127,7 @@ class TestHostLocks(TestCase):
         for error in (
             TimeoutError("timeout"),
             OSError("network"),
+            HTTPException("http failure"),
             ValueError("bad URL"),
         ):
             with self.subTest(error=type(error).__name__):
@@ -138,6 +139,9 @@ class TestHostLocks(TestCase):
                         station_get(url)
                 if isinstance(error, ValueError):
                     self.assertIs(raised.exception.__cause__, error)
+                    self.assertTrue(
+                        str(raised.exception).startswith("Receiver request failed:")
+                    )
                 else:
                     self.assertIs(raised.exception, error)
 
@@ -216,16 +220,25 @@ class TestPendingOutageCounts(TestCase):
             self.assertEqual(send.call_args.args[0]["consecutive_failures"], 3)
 
     @given(
-        st.lists(
+        actions=st.lists(
             st.sampled_from(("failure", "fetch", "commit")), min_size=1, max_size=60
-        )
+        ),
+        initial_failures=st.integers(min_value=0, max_value=20),
+        initial_pending=st.booleans(),
     )
     def test_pending_peak_and_current_counter_follow_independent_invariants(
-        self, actions: list[str]
+        self, *, actions: list[str], initial_failures: int, initial_pending: bool
     ) -> None:
-        notifier = AlertNotifier(_ALERTS, "http://station.local/", Mock())
-        failures = peak = 0
-        pending = False
+        notifier = AlertNotifier(
+            _ALERTS,
+            "http://station.local/",
+            Mock(),
+            consecutive_failures=initial_failures,
+            alert_sent=initial_pending,
+        )
+        failures = initial_failures
+        peak = 0
+        pending = initial_pending
         expected: list[tuple[str, int]] = []
         with patch.object(AlertNotifier, "_send") as send:
             for action in actions:
@@ -239,10 +252,13 @@ class TestPendingOutageCounts(TestCase):
                             peak = max(peak, failures)
                         notifier.record_failure()
                     case "fetch":
+                        if pending:
+                            peak = max(peak, failures)
                         failures = 0
                         notifier.record_fetch_success()
                     case "commit":
                         if pending:
+                            peak = max(peak, failures)
                             expected.append(("station_online", peak))
                         failures = peak = 0
                         pending = False
@@ -412,12 +428,13 @@ class TestSignalContext(TestCase):
 
     def test_opaque_native_handler_is_untouched_during_daemon_cleanup(self) -> None:
         server = Mock()
+        logger = Mock()
         with (
             patch("builtins.print"),
             patch("ambientweather2sqlite.daemon.signal.getsignal", return_value=None),
             patch("ambientweather2sqlite.daemon.signal.signal") as install,
             patch(
-                "ambientweather2sqlite.daemon._configure_logging", return_value=Mock()
+                "ambientweather2sqlite.daemon._configure_logging", return_value=logger
             ),
             patch(
                 "ambientweather2sqlite.daemon.create_metadata", return_value=({}, {})
@@ -433,6 +450,25 @@ class TestSignalContext(TestCase):
         self.assertEqual(exit_code.exception.code, 0)
         install.assert_not_called()
         server.shutdown.assert_called_once()
+        logger.warning.assert_called_once()
+        self.assertIn(
+            "SIGTERM translator not installed", logger.warning.call_args.args[0]
+        )
+
+    def test_opaque_native_handler_without_logger_warns_and_preserves_body_error(
+        self,
+    ) -> None:
+        with (
+            patch("ambientweather2sqlite.daemon.signal.getsignal", return_value=None),
+            patch("ambientweather2sqlite.daemon.signal.signal") as install,
+            self.assertLogs("ambientweather2sqlite.daemon", level="WARNING") as logs,
+            self.assertRaisesRegex(RuntimeError, "collection failed"),
+            _sigterm_handler(),
+        ):
+            raise RuntimeError("collection failed")
+        install.assert_not_called()
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("opaque native handler", logs.output[0])
 
     def test_worker_thread_never_reads_or_changes_signal_handlers(self) -> None:
         def run() -> None:

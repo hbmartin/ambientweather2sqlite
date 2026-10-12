@@ -9,6 +9,7 @@ from .models import (
     RecoveryConfig,
     RediscoveryConfig,
 )
+from .station_http import _receiver_address
 
 _CURRENT_PATH = Path.cwd()
 _DEFAULT_CONFIG_NAME = "aw2sqlite.toml"
@@ -118,6 +119,16 @@ def _validate_url(value: str, key: str) -> str:
     if not value.startswith(("http://", "https://")):
         msg = f"{key} must start with http:// or https://"
         raise ValueError(msg)
+    return value
+
+
+def _validate_receiver_url(value: str) -> str:
+    _validate_url(value, "live_data_url")
+    try:
+        _receiver_address(value)
+    except (ValueError,) as error:  # noqa: B013
+        msg = f"live_data_url is invalid: {error}"
+        raise ValueError(msg) from error
     return value
 
 
@@ -234,9 +245,8 @@ def _optional_recovery(config_data: dict[str, object]) -> RecoveryConfig:
 def load_config(config_path: Path) -> AppConfig:
     config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     return AppConfig(
-        live_data_url=_validate_url(
+        live_data_url=_validate_receiver_url(
             _require_str(config_data, "live_data_url"),
-            "live_data_url",
         ),
         database_path=_require_str(config_data, "database_path"),
         port=_validate_port(_optional_int(config_data, "port"), "port"),

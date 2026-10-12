@@ -44,10 +44,15 @@ def station_get(
 ) -> str:
     """Fetch one page, serializing requests and retries to the same host key."""
     try:
-        with _receiver_lock(url):
-            if timeout is None:
-                return mureq.get(url, auto_retry=auto_retry)
-            return mureq.get(url, auto_retry=auto_retry, timeout=timeout)
+        request_lock = _receiver_lock(url)
     except (ValueError,) as error:  # noqa: B013
         msg = f"Invalid receiver URL: {error}"
         raise HTTPException(msg) from error
+    with request_lock:
+        try:
+            if timeout is None:
+                return mureq.get(url, auto_retry=auto_retry)
+            return mureq.get(url, auto_retry=auto_retry, timeout=timeout)
+        except (ValueError,) as error:  # noqa: B013
+            msg = f"Receiver request failed: {error}"
+            raise HTTPException(msg) from error

@@ -435,7 +435,7 @@ class TestReachabilityTransitions(TestCase):
                     self.rediscovery,
                     interactive=False,
                 )
-        post.assert_called_once_with("station_online")
+        post.assert_called_once_with("station_online", 3)
         self.assertFalse(self.notifier.alert_sent)
 
     def test_failed_store_does_not_clear_previous_terminal_frame_twice(self) -> None:
