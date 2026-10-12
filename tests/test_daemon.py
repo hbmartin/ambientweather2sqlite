@@ -634,10 +634,10 @@ class TestDaemonRediscovery(TestCase):
             mocks["print"].call_args_list,
         )
 
-    def test_relocates_from_the_fast_timeout_retry_branch(self):
+    def test_relocates_after_paced_timeout_retries(self) -> None:
         mocks = self._run_daemon(
             fetch_side_effect=[TimeoutError, TimeoutError, "<html />"],
-            wait_side_effect=[KeyboardInterrupt],
+            wait_side_effect=[None, None, KeyboardInterrupt],
             find_result=(self._NEW_URL, self._MAC),
             interactive=False,
         )
@@ -894,9 +894,9 @@ class TestStartDaemon(TestCase):
         # ...but the redundant status line is not reprinted to captured stdout.
         printed = [c.args[0] for c in mock_print.call_args_list if c.args]
         self.assertFalse(any("Warming up" in line for line in printed))
-        # No terminal cursor control, and the fast warmup retry never waits.
+        # No terminal cursor control; timeout retries still wait a full interval.
         mock_clear_lines.assert_not_called()
-        mock_wait.assert_not_called()
+        mock_wait.assert_called_once()
 
     def test_start_daemon_logs_metadata_and_live_data_http_errors(self):
         database_path = "/tmp/weather.db"
@@ -947,7 +947,7 @@ class TestStartDaemon(TestCase):
             mock_print.call_args_list,
         )
 
-    def test_start_daemon_survives_insert_errors_and_still_publishes(self):
+    def test_start_daemon_survives_insert_errors_without_publishing(self) -> None:
         database_path = "/tmp/weather.db"
         logger = Mock()
 
@@ -993,7 +993,7 @@ class TestStartDaemon(TestCase):
             "Failed to insert observation",
             logger.warning.call_args.args[0],
         )
-        mock_publish.assert_called_once()
+        mock_publish.assert_not_called()
 
     def test_start_daemon_skips_insert_when_fetch_parses_zero_sensors(self):
         database_path = "/tmp/weather.db"
@@ -1042,7 +1042,7 @@ class TestStartDaemon(TestCase):
             mock_print.call_args_list,
         )
 
-    def test_start_daemon_retries_after_timeout_without_waiting(self):
+    def test_start_daemon_paces_retries_after_timeout(self) -> None:
         database_path = "/tmp/weather.db"
         logger = Mock()
 
@@ -1075,7 +1075,7 @@ class TestStartDaemon(TestCase):
         self.assertEqual(exc.exception.code, 0)
         self.assertEqual(logger.info.call_args_list, [call("TimeoutError")])
         self.assertEqual(mock_clear_lines.call_args_list, [call(0), call(1)])
-        mock_wait.assert_not_called()
+        mock_wait.assert_called_once()
         mock_insert.assert_not_called()
         self.assertIn(
             call("Warming up weather station's server..."),

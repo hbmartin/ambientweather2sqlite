@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from ambientweather2sqlite.cli.commands import main
 from ambientweather2sqlite.cli.parser import parse_args
 from ambientweather2sqlite.exceptions import UnsupportedSchemaVersionError
-from ambientweather2sqlite.models import AppConfig, RediscoveryConfig
+from ambientweather2sqlite.models import AppConfig, RecoveryConfig, RediscoveryConfig
 
 
 class TestMainShim(TestCase):
@@ -190,6 +190,7 @@ class TestMainServe(TestCase):
             mqtt_config=None,
             alert_config=None,
             rediscovery_config=RediscoveryConfig(),
+            recovery_config=RecoveryConfig(),
         )
 
     @patch("ambientweather2sqlite.cli.commands.start_daemon")
@@ -227,6 +228,7 @@ class TestMainServe(TestCase):
             mqtt_config=None,
             alert_config=None,
             rediscovery_config=RediscoveryConfig(),
+            recovery_config=RecoveryConfig(),
         )
 
 

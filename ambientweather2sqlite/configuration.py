@@ -2,7 +2,13 @@ import tomllib
 from pathlib import Path
 from typing import overload
 
-from .models import AlertConfig, AppConfig, MqttConfig, RediscoveryConfig
+from .models import (
+    AlertConfig,
+    AppConfig,
+    MqttConfig,
+    RecoveryConfig,
+    RediscoveryConfig,
+)
 
 _CURRENT_PATH = Path.cwd()
 _DEFAULT_CONFIG_NAME = "aw2sqlite.toml"
@@ -190,6 +196,35 @@ def _optional_rediscovery(config_data: dict[str, object]) -> RediscoveryConfig:
     )
 
 
+def _recovery_positive_int(table: dict[str, object], key: str, default: int) -> int:
+    value = _optional_int(table, key, default=default)
+    if value < 1:
+        msg = f"recovery.{key} must be at least 1"
+        raise ValueError(msg)
+    return value
+
+
+def _optional_recovery(config_data: dict[str, object]) -> RecoveryConfig:
+    value = config_data.get("recovery")
+    if value is None:
+        return RecoveryConfig()
+    table = _require_table(value, "recovery")
+    return RecoveryConfig(
+        enabled=_optional_bool(table, "enabled", default=True),
+        stale_seconds=_recovery_positive_int(table, "stale_seconds", 300),
+        check_interval_seconds=_recovery_positive_int(
+            table,
+            "check_interval_seconds",
+            60,
+        ),
+        recovery_observations=_recovery_positive_int(
+            table,
+            "recovery_observations",
+            3,
+        ),
+    )
+
+
 def load_config(config_path: Path) -> AppConfig:
     config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     return AppConfig(
@@ -205,6 +240,7 @@ def load_config(config_path: Path) -> AppConfig:
         mqtt=_optional_mqtt(config_data),
         alerts=_optional_alerts(config_data),
         rediscovery=_optional_rediscovery(config_data),
+        recovery=_optional_recovery(config_data),
     )
 
 

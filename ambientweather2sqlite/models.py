@@ -42,6 +42,14 @@ class RediscoveryConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RecoveryConfig:
+    enabled: bool = True
+    stale_seconds: int = 300
+    check_interval_seconds: int = 60
+    recovery_observations: int = 3
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     live_data_url: str
     database_path: str
@@ -52,6 +60,7 @@ class AppConfig:
     mqtt: MqttConfig | None = None
     alerts: AlertConfig | None = None
     rediscovery: RediscoveryConfig = RediscoveryConfig()
+    recovery: RecoveryConfig = RecoveryConfig()
 
 
 class LiveDataMetadata(TypedDict):

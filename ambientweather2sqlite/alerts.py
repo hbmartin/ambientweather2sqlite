@@ -48,12 +48,32 @@ class AlertNotifier:
         self.alert_sent = False
 
     def _post(self, event: str) -> None:
-        payload = {
+        payload: dict[str, object] = {
             "event": event,
             "station_url": self.station_url,
             "consecutive_failures": self.consecutive_failures,
             "timestamp": datetime.now(UTC).isoformat(),
         }
+        self._send(payload)
+
+    def collection_event(
+        self,
+        event: str,
+        last_observation_ts: str | None,
+        age_seconds: float,
+    ) -> None:
+        """Send a freshness transition without changing fetch-failure counters."""
+        self._send(
+            {
+                "event": event,
+                "station_url": self.station_url,
+                "last_observation_ts": last_observation_ts,
+                "age_seconds": age_seconds,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
+
+    def _send(self, payload: dict[str, object]) -> None:
         try:
             mureq.post(
                 self.config.webhook_url,

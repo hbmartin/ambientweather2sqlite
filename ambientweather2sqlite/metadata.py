@@ -15,6 +15,7 @@ from ambientweather2sqlite.database import (
     persist_sensor_metadata,
     query_sensor_metadata,
 )
+from ambientweather2sqlite.station_http import STATION_REQUEST_LOCK
 from ambientweather2sqlite.units_mapping import units_for_columns
 
 if TYPE_CHECKING:
@@ -124,13 +125,14 @@ def create_metadata(
     live_data_url: str,
 ) -> tuple[LabelMap, ColumnUnitMap]:
     try:
-        labels = extract_labels(mureq.get(live_data_url, auto_retry=True))
-        units = extract_units(
-            mureq.get(
-                urljoin(live_data_url, "station.htm"),
-                auto_retry=True,
-            ),
-        )
+        with STATION_REQUEST_LOCK:
+            labels = extract_labels(mureq.get(live_data_url, auto_retry=True))
+            units = extract_units(
+                mureq.get(
+                    urljoin(live_data_url, "station.htm"),
+                    auto_retry=True,
+                ),
+            )
         labels_with_units, column_to_unit = units_for_columns(labels, units)
     except (HTTPException, TimeoutError) as e:
         print(f"Error fetching metadata labels: {e}")

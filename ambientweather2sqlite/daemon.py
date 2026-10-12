@@ -29,10 +29,13 @@ from .models import (
     LiveData,
     MqttConfig,
     Observation,
+    RecoveryConfig,
     RediscoveryConfig,
 )
 from .mqtt import MqttError, publish, publish_message
+from .recovery import monitor_collection
 from .rediscovery import StationRediscovery
+from .station_http import STATION_REQUEST_LOCK
 
 # Cap the rotating daemon log so it cannot grow without bound on a
 # long-running deployment: up to 4 files of ~5 MB each (~20 MB total).
@@ -143,12 +146,13 @@ def _install_sigterm_handler() -> None:
 def fetch_once(live_data_url: str) -> None:
     """Fetch a single observation and print it without writing to the DB."""
     try:
-        body = mureq.get(live_data_url)
+        with STATION_REQUEST_LOCK:
+            body = mureq.get(live_data_url)
         live_data = extract_values(body)
-    except TimeoutError:
+    except (TimeoutError,):
         print("Error: Weather station timed out.", file=sys.stderr)
         sys.exit(1)
-    except HTTPException as e:
+    except (HTTPException,) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     if not live_data:
@@ -275,7 +279,7 @@ def _record_cycle_success(
     notifier: AlertNotifier | None,
     rediscovery: StationRediscovery | None,
 ) -> None:
-    """Reset both failure trackers after a successful fetch."""
+    """Reset failure trackers after storing a fresh observation."""
     if notifier is not None:
         notifier.record_success()
     if rediscovery is not None:
@@ -311,7 +315,7 @@ def _handle_failed_cycle(  # noqa: PLR0913
     *,
     interactive: bool = True,
 ) -> tuple[str, int]:
-    """Count a failed collection attempt and sleep until the next slot.
+    """Count a failed attempt and wait at least one full polling interval.
 
     Returns the (possibly relocated) live data URL and the number of extra
     status lines printed for the interactive redraw.
@@ -324,8 +328,9 @@ def _handle_failed_cycle(  # noqa: PLR0913
         on_url_change,
         interactive=interactive,
     )
+    now = time.monotonic()
     wait_for_next_update(
-        next_deadline(epoch, period_seconds, time.monotonic()),
+        max(next_deadline(epoch, period_seconds, now), now + period_seconds),
         show_countdown=interactive,
     )
     return live_data_url, extra_lines
@@ -341,13 +346,14 @@ def _store_observation(  # noqa: PLR0913
     mqtt_config: MqttConfig | None,
     *,
     collection_attempt: int = 0,
-) -> None:
+) -> bool:
     """Store one row and refresh metadata after a successful schema change."""
     added_sensor_names: list[str] = []
     try:
         added_sensor_names = insert_observation(database_path, live_data)
     except (InvalidTimestampError, sqlite3.Error) as e:
         logger.warning("Failed to insert observation: %s", e)
+        return False
 
     schema_changed = bool(added_sensor_names)
     observed_sensor_names = {
@@ -367,6 +373,7 @@ def _store_observation(  # noqa: PLR0913
             mqtt_config,
             observed_sensor_names=observed_sensor_names,
         )
+    return True
 
 
 def _is_stale_observation(
@@ -420,29 +427,30 @@ def _collect_forever(  # noqa: PLR0913
         if interactive:
             clear_lines(remove_newlines)
         try:
-            body = mureq.get(live_data_url)
+            with STATION_REQUEST_LOCK:
+                body = mureq.get(live_data_url)
             live_data = extract_values(body)
-        except TimeoutError:
+        except (TimeoutError,):
             logger.info("TimeoutError")
-            # Retry warmup quickly, but on a captured stream skip the repeated
-            # status line - it can't overwrite the previous one and would pile
-            # up on every fast retry. The rotating daemon log still records it.
+            # Pace retries even during warmup. Captured streams omit the
+            # repeated status line; the rotating daemon log still records it.
             if interactive:
                 remove_newlines = _status(
                     "Warming up weather station's server...",
                     interactive=True,
                 )
-            if notifier is not None:
-                notifier.record_failure()
-            live_data_url, extra_lines = _relocate_if_needed(
+            live_data_url, extra_lines = _handle_failed_cycle(
+                notifier,
                 rediscovery,
-                live_data_url,
                 on_url_change,
+                live_data_url,
+                epoch,
+                period_seconds,
                 interactive=interactive,
             )
             remove_newlines += extra_lines
             continue
-        except HTTPException as e:
+        except (HTTPException, OSError) as e:
             logger.info("%s\n%s", type(e).__name__, e)
             remove_newlines = _status(
                 f"Error fetching live data: {e}",
@@ -481,7 +489,6 @@ def _collect_forever(  # noqa: PLR0913
             )
             remove_newlines += extra_lines
             continue
-        _record_cycle_success(notifier, rediscovery)
         station_time = extract_station_time(body)
         if _is_stale_observation(
             previous_station_time,
@@ -498,12 +505,7 @@ def _collect_forever(  # noqa: PLR0913
                 interactive=interactive,
             )
         else:
-            remove_newlines = _emit_observation(
-                labels,
-                live_data,
-                interactive=interactive,
-            )
-            _store_observation(
+            stored = _store_observation(
                 database_path,
                 live_data_url,
                 live_data,
@@ -513,9 +515,16 @@ def _collect_forever(  # noqa: PLR0913
                 mqtt_config,
                 collection_attempt=collection_attempt,
             )
-            _publish_observation(logger, mqtt_config, live_data)
-            previous_station_time = station_time
-            previous_live_data = live_data
+            if stored:
+                _record_cycle_success(notifier, rediscovery)
+                remove_newlines = _emit_observation(
+                    labels,
+                    live_data,
+                    interactive=interactive,
+                )
+                _publish_observation(logger, mqtt_config, live_data)
+                previous_station_time = station_time
+                previous_live_data = live_data
         wait_for_next_update(
             next_deadline(epoch, period_seconds, time.monotonic()),
             show_countdown=interactive,
@@ -534,6 +543,7 @@ def start_daemon(  # noqa: PLR0913
     mqtt_config: MqttConfig | None = None,
     alert_config: AlertConfig | None = None,
     rediscovery_config: RediscoveryConfig | None = None,
+    recovery_config: RecoveryConfig | None = None,
     interactive: bool | None = None,
 ) -> None:
     # A non-tty stdout (Docker, systemd, launchd, a redirect) can't overwrite
@@ -547,6 +557,48 @@ def start_daemon(  # noqa: PLR0913
     log_path = Path(database_path).parent / f"{Path(database_path).stem}_daemon.log"
     logger = _configure_logging(log_path, log_format=log_format)
 
+    notifier = (
+        AlertNotifier(alert_config, live_data_url, logger)
+        if alert_config is not None
+        else None
+    )
+    _install_sigterm_handler()
+    with monitor_collection(
+        database_path,
+        recovery_config,
+        logger,
+        notifier.collection_event if notifier is not None else None,
+    ):
+        _serve_station(
+            live_data_url,
+            database_path,
+            logger,
+            notifier,
+            port=port,
+            period_seconds=period_seconds,
+            host=host,
+            auth_token=auth_token,
+            mqtt_config=mqtt_config,
+            rediscovery_config=rediscovery_config,
+            interactive=interactive,
+        )
+
+
+def _serve_station(  # noqa: PLR0913
+    live_data_url: str,
+    database_path: str,
+    logger: logging.Logger,
+    notifier: AlertNotifier | None,
+    *,
+    port: int | None,
+    period_seconds: int,
+    host: str,
+    auth_token: str | None,
+    mqtt_config: MqttConfig | None,
+    rediscovery_config: RediscoveryConfig | None,
+    interactive: bool,
+) -> None:
+    """Initialize metadata and the API, then collect until interrupted."""
     labels: dict[str, str] = {}
     column_to_unit: ColumnUnitMap = {}
     try:
@@ -564,12 +616,6 @@ def start_daemon(  # noqa: PLR0913
         server = Server(live_data_url, database_path, port, host, auth_token)
         server.start()
 
-    notifier = (
-        AlertNotifier(alert_config, live_data_url, logger)
-        if alert_config is not None
-        else None
-    )
-
     rediscovery_config = rediscovery_config or RediscoveryConfig()
     rediscovery = (
         StationRediscovery(rediscovery_config, live_data_url, logger)
@@ -584,7 +630,6 @@ def start_daemon(  # noqa: PLR0913
         if notifier is not None:
             notifier.station_url = new_url
 
-    _install_sigterm_handler()
     try:
         _collect_forever(
             live_data_url,
@@ -599,7 +644,7 @@ def start_daemon(  # noqa: PLR0913
             on_url_change=_apply_relocated_url,
             interactive=interactive,
         )
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt,):
         print(f"\nStopping... results saved to {database_path}")
         if server is not None:
             server.shutdown()

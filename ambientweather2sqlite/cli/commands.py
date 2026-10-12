@@ -74,6 +74,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         mqtt_config=config.mqtt,
         alert_config=config.alerts,
         rediscovery_config=config.rediscovery,
+        recovery_config=config.recovery,
     )
 
 

@@ -5,6 +5,51 @@ from unittest.mock import patch
 
 from ambientweather2sqlite import configuration
 from ambientweather2sqlite.configuration import load_config
+from ambientweather2sqlite.models import RecoveryConfig
+
+
+class TestRecoveryConfiguration(TestCase):
+    def _load(self, recovery: str = "") -> RecoveryConfig:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(
+                'live_data_url = "http://station/livedata.htm"\n'
+                'database_path = "/tmp/weather.db"\n' + recovery,
+                encoding="utf-8",
+            )
+            return load_config(path).recovery
+
+    def test_defaults_enable_embedded_monitor(self) -> None:
+        self.assertEqual(self._load(), RecoveryConfig())
+
+    def test_custom_monitor_settings_and_disable(self) -> None:
+        self.assertEqual(
+            self._load(
+                "[recovery]\nenabled = false\nstale_seconds = 600\n"
+                "check_interval_seconds = 30\nrecovery_observations = 4\n",
+            ),
+            RecoveryConfig(
+                enabled=False,
+                stale_seconds=600,
+                check_interval_seconds=30,
+                recovery_observations=4,
+            ),
+        )
+
+    def test_invalid_settings_are_rejected(self) -> None:
+        for key in ("stale_seconds", "check_interval_seconds", "recovery_observations"):
+            for value in ("0", "-1", "true", "1.5", '"bad"'):
+                with (
+                    self.subTest(key=key, value=value),
+                    self.assertRaises(
+                        (TypeError, ValueError),
+                    ),
+                ):
+                    self._load(f"[recovery]\n{key} = {value}\n")
+        with self.assertRaises(TypeError):
+            self._load("[recovery]\nenabled = 1\n")
+        with self.assertRaises(TypeError):
+            self._load("recovery = true\n")
 
 
 class TestConfiguration(TestCase):

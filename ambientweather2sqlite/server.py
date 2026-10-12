@@ -34,6 +34,7 @@ from .models import (
     build_range_aggregated_payload,
 )
 from .prometheus import build_prometheus_metrics
+from .station_http import STATION_REQUEST_LOCK
 
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -136,7 +137,8 @@ def create_request_handler(  # noqa: C901
 
         def _send_live_data(self) -> None:
             try:
-                body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
+                with STATION_REQUEST_LOCK:
+                    body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
             except Exception as e:  # noqa: BLE001
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 500)

@@ -409,7 +409,9 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
 - If the station's DHCP lease moves it to a new IP, the daemon re-locates it automatically (on by default; disable with `enabled = false` in the `[rediscovery]` config table). After `failure_threshold` consecutive failed fetches (default 2) it rescans the local subnet and verifies the station's identity via the MAC address it recorded from the OS ARP cache after a previous successful fetch, falling back to an "exactly one station found" rule when no MAC data is available. A relocation is logged as a warning and switches the polled URL in memory only - the config file is never modified, so the original URL is used again after a restart. Rescans run at most once every 5 minutes
-- When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires on the first success afterward - one alert per outage, and webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
+- Failed fetches, including warmup timeouts, wait at least one full polling interval before retrying. Receiver HTTP requests from collection, metadata, discovery, and the live API proxy are serialized within the process to reduce overlapping requests
+- A failed database insert is logged and does not reset failure trackers, publish an observation, or print a successful recording
+- When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires after the first fresh observation is successfully stored afterward. Webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
 - Sensor-name mappings, labels, and units are persisted in SQLite. The adjacent `<database_stem>_metadata.json` Datasette sidecar is refreshed when new sensor columns appear and can be regenerated offline after a restore (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
 - Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown
 
@@ -424,6 +426,49 @@ collision-free physical name and stores its label/unit metadata.
 SQLite is configured with WAL journal mode, normal synchronous writes, in-memory temp storage, and 256MB memory-mapped I/O.
 
 **→ [Full database design reference](docs/database.md)** - schema evolution, timestamp semantics, indexes, migrations, concurrency, backup behavior, and integrity boundaries.
+
+### Embedded collection recovery monitor
+
+`aw2sqlite serve` monitors SQLite freshness in a background thread inside the
+existing collector process. It needs no additional launchd or systemd job and
+makes no extra HTTP requests to the receiver. The monitor continues checking
+while a station request is stalled, including during startup metadata fetching.
+
+By default it checks every 60 seconds and emits one **ERROR** in the daemon log
+when observations are at least 300 seconds old. An empty database gets a
+300-second startup grace period; an existing stale database is reported on the
+first check. Collection retries and DHCP rediscovery continue. If the receiver
+remains stalled, the error asks for a network check and a possible manual power
+restart. The collector does not power-cycle equipment or restart itself.
+
+Recovery is logged only after three distinct, advancing, recent observation
+timestamps have been verified across checks. Repeated pages that produce no new
+rows, repeated checks of the same row, failed inserts, unreadable databases, and
+future timestamps cannot establish recovery. Another stale interval or database
+read error resets partial recovery progress. Existing stale-page detection still
+uses the receiver's reported time and sensor values before storing observations.
+
+Optional settings in `aw2sqlite.toml`:
+
+```toml
+[recovery]
+enabled = true
+stale_seconds = 300
+check_interval_seconds = 60
+recovery_observations = 3
+```
+
+All numeric settings must be positive integers. Set `enabled = false` to disable
+the monitor. When using `start_daemon()` directly, pass a `RecoveryConfig` as
+`recovery_config` to enable monitoring.
+
+If `[alerts]` is configured, freshness transitions also send
+`collection_stalled` and `collection_resumed` webhooks, once per transition.
+Their payload includes `station_url`, `last_observation_ts`, `age_seconds`, and
+the event's UTC `timestamp`. Use `collection_resumed` for consumers that require
+verified collection recovery; `station_online` reports the earlier first
+successful stored observation. These events describe collection only; downstream
+prediction software must verify that it consumed the fresh observations.
 
 ## HTTP JSON API
 
