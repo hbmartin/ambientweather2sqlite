@@ -25,7 +25,7 @@ from ambientweather2sqlite.database import (
 from ambientweather2sqlite.models import RecoveryConfig
 from ambientweather2sqlite.recovery import CollectionMonitor, monitor_collection
 from ambientweather2sqlite.scanner import probe_weather_station
-from ambientweather2sqlite.station_http import STATION_REQUEST_LOCK
+from ambientweather2sqlite.station_http import _receiver_lock
 
 
 class TestCollectionMonitor(TestCase):
@@ -118,8 +118,8 @@ class TestCollectionMonitor(TestCase):
         for seconds in (360, 420, 360, 420):
             timestamp = (self.now + timedelta(seconds=seconds)).isoformat()
             with patch(
-                "ambientweather2sqlite.recovery.query_latest_timestamp",
-                return_value=timestamp,
+                "ambientweather2sqlite.recovery._query_monitor_timestamp",
+                return_value=(timestamp, datetime.fromisoformat(timestamp), False),
             ):
                 self._check(420)
         self.assertTrue(self.monitor.stalled)
@@ -132,7 +132,7 @@ class TestCollectionMonitor(TestCase):
         self._insert(60)
         self._check(60)
         with patch(
-            "ambientweather2sqlite.recovery.query_latest_timestamp",
+            "ambientweather2sqlite.recovery._query_monitor_timestamp",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
             self._check(120)
@@ -152,8 +152,8 @@ class TestCollectionMonitor(TestCase):
             with (
                 self.subTest(raw=raw),
                 patch(
-                    "ambientweather2sqlite.recovery.query_latest_timestamp",
-                    return_value=raw,
+                    "ambientweather2sqlite.recovery._query_monitor_timestamp",
+                    return_value=(None, None, True),
                 ),
             ):
                 self._check(300)
@@ -176,8 +176,8 @@ class TestCollectionMonitor(TestCase):
         for sample in range(1, required + 1):
             now = self.now + timedelta(seconds=300 + sample)
             with patch(
-                "ambientweather2sqlite.recovery.query_latest_timestamp",
-                return_value=now.isoformat(),
+                "ambientweather2sqlite.recovery._query_monitor_timestamp",
+                return_value=(now.isoformat(), now, False),
             ):
                 monitor.check(now)
                 monitor.check(now)
@@ -189,7 +189,7 @@ class TestCollectionMonitor(TestCase):
         logger = Mock()
         logger.error.side_effect = lambda *_args: reported.set()
         with (
-            STATION_REQUEST_LOCK,
+            _receiver_lock("http://127.0.0.1/livedata.htm"),
             monitor_collection(
                 self.database_path,
                 RecoveryConfig(),
@@ -249,7 +249,7 @@ class TestCollectionMonitor(TestCase):
             for minute in ("09:01", "09:01", "09:02", "09:03")
         ]
         with (
-            patch("ambientweather2sqlite.daemon.mureq.get", side_effect=pages),
+            patch("ambientweather2sqlite.station_http.mureq.get", side_effect=pages),
             patch("ambientweather2sqlite.daemon._refresh_metadata"),
             patch(
                 "ambientweather2sqlite.daemon.wait_for_next_update", side_effect=wait
@@ -283,7 +283,7 @@ class TestCollectionMonitor(TestCase):
             ) as wait,
         ):
             _handle_failed_cycle(
-                None, None, None, "http://station/", 0, 60, interactive=False
+                None, None, None, "http://station/", 60, interactive=False
             )
         wait.assert_called_once_with(119, show_countdown=False)
 

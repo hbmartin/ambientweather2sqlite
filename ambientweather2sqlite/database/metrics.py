@@ -76,6 +76,29 @@ def query_latest_timestamp(db_path: str) -> str | None:
         return row["latest"] if row else None
 
 
+def _query_monitor_timestamp(
+    db_path: str,
+    now: datetime,
+) -> tuple[str | None, datetime | None, bool]:
+    """Find a usable timestamp without changing public maximum-timestamp queries."""
+    rejected = False
+    with closing(_connect_database(db_path, read_only=True)) as conn:
+        rows = conn.execute(
+            f"SELECT {_TS_COL} FROM {_DEFAULT_TABLE_NAME} ORDER BY {_TS_COL} DESC",
+        )
+        for (raw,) in rows:
+            if isinstance(raw, str):
+                try:
+                    latest = _parse_stored_timestamp(raw)
+                except (ValueError, OverflowError):
+                    pass
+                else:
+                    if latest <= now:
+                        return raw, latest, rejected
+            rejected = True
+    return None, None, rejected
+
+
 def query_latest_observation(db_path: str) -> Observation | None:
     """Return the most recent observation row as a dict, or None if empty."""
     with closing(

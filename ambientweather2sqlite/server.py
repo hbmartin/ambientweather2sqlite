@@ -3,8 +3,9 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import UTC, datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, ClassVar, cast, override
@@ -12,7 +13,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ambientweather2sqlite.exceptions import Aw2SqliteError, MissingTimezoneError
 
-from . import mureq
 from .awparser import extract_labels, extract_values
 from .database import (
     DEFAULT_GAP_THRESHOLD_SECONDS,
@@ -34,7 +34,7 @@ from .models import (
     build_range_aggregated_payload,
 )
 from .prometheus import build_prometheus_metrics
-from .station_http import STATION_REQUEST_LOCK
+from .station_http import station_get
 
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -137,8 +137,7 @@ def create_request_handler(  # noqa: C901
 
         def _send_live_data(self) -> None:
             try:
-                with STATION_REQUEST_LOCK:
-                    body = mureq.get(self.LIVE_DATA_URL, auto_retry=True)
+                body = station_get(self.LIVE_DATA_URL, auto_retry=True)
             except Exception as e:  # noqa: BLE001
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 500)
@@ -360,29 +359,39 @@ class Server:
         host: str,
         auth_token: str | None = None,
     ):
-        handler_class = create_request_handler(live_data_url, db_path, auth_token)
-        self._handler_class = handler_class
-        self._teardown_logger = cast("Any", handler_class).teardown_logger
-        self.httpd = HTTPServer(
-            (host, port),
-            handler_class,
-        )
-        self.server_thread = threading.Thread(
-            target=self.httpd.serve_forever,
-            daemon=True,
-        )
+        with ExitStack() as cleanup:
+            handler_class = create_request_handler(live_data_url, db_path, auth_token)
+            self._handler_class = handler_class
+            self._teardown_logger = cast("Any", handler_class).teardown_logger
+            cleanup.callback(self._teardown_logger)
+            self.httpd = ThreadingHTTPServer((host, port), handler_class)
+            cleanup.callback(self.httpd.server_close)
+            self._closed = False
+            self.server_thread = threading.Thread(
+                target=self.httpd.serve_forever,
+                daemon=True,
+            )
+            cleanup.pop_all()
 
     def start(self) -> None:
         """Serve requests on a daemon background thread."""
         self.server_thread.start()
 
     def update_live_data_url(self, live_data_url: str) -> None:
-        """Point the /live endpoint at a relocated station."""
+        """Point the / endpoint at a relocated station."""
         cast("Any", self._handler_class).LIVE_DATA_URL = live_data_url
 
     def shutdown(self) -> None:
         """Stop serving, close the socket, and release the log handler."""
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        self.server_thread.join()
-        self._teardown_logger()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self.server_thread.is_alive():
+                self.httpd.shutdown()
+                self.server_thread.join()
+        finally:
+            try:
+                self.httpd.server_close()
+            finally:
+                self._teardown_logger()

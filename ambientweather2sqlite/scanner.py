@@ -7,9 +7,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.client import HTTPException
 
-from ambientweather2sqlite import mureq
 from ambientweather2sqlite.awparser import extract_values
-from ambientweather2sqlite.station_http import STATION_REQUEST_LOCK
+from ambientweather2sqlite.station_http import station_get
 
 
 def _is_non_loopback_ipv4(address: object) -> bool:
@@ -183,8 +182,7 @@ def probe_weather_station(ip: str) -> str | None:
     """
     url = f"http://{ip}/livedata.htm"
     try:
-        with STATION_REQUEST_LOCK:
-            body = mureq.get(url, timeout=3)
+        body = station_get(url, timeout=3)
         values = extract_values(body)
         if values:
             return url

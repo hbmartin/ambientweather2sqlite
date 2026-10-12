@@ -163,10 +163,7 @@ def _optional_alerts(config_data: dict[str, object]) -> AlertConfig | None:
     if alerts_data is None:
         return None
     alerts_table = _require_table(alerts_data, "alerts")
-    failure_threshold = _optional_int(alerts_table, "failure_threshold", default=3)
-    if failure_threshold < 1:
-        msg = "alerts.failure_threshold must be at least 1"
-        raise ValueError(msg)
+    failure_threshold = _positive_int(alerts_table, "alerts", "failure_threshold", 3)
     timeout_seconds = _optional_float(alerts_table, "timeout_seconds", default=5.0)
     if timeout_seconds <= 0:
         msg = "alerts.timeout_seconds must be greater than 0"
@@ -186,20 +183,27 @@ def _optional_rediscovery(config_data: dict[str, object]) -> RediscoveryConfig:
     if rediscovery_data is None:
         return RediscoveryConfig()
     rediscovery_table = _require_table(rediscovery_data, "rediscovery")
-    failure_threshold = _optional_int(rediscovery_table, "failure_threshold", default=2)
-    if failure_threshold < 1:
-        msg = "rediscovery.failure_threshold must be at least 1"
-        raise ValueError(msg)
+    failure_threshold = _positive_int(
+        rediscovery_table,
+        "rediscovery",
+        "failure_threshold",
+        2,
+    )
     return RediscoveryConfig(
         enabled=_optional_bool(rediscovery_table, "enabled", default=True),
         failure_threshold=failure_threshold,
     )
 
 
-def _recovery_positive_int(table: dict[str, object], key: str, default: int) -> int:
+def _positive_int(
+    table: dict[str, object],
+    section: str,
+    key: str,
+    default: int,
+) -> int:
     value = _optional_int(table, key, default=default)
     if value < 1:
-        msg = f"recovery.{key} must be at least 1"
+        msg = f"{section}.{key} must be at least 1"
         raise ValueError(msg)
     return value
 
@@ -211,14 +215,16 @@ def _optional_recovery(config_data: dict[str, object]) -> RecoveryConfig:
     table = _require_table(value, "recovery")
     return RecoveryConfig(
         enabled=_optional_bool(table, "enabled", default=True),
-        stale_seconds=_recovery_positive_int(table, "stale_seconds", 300),
-        check_interval_seconds=_recovery_positive_int(
+        stale_seconds=_positive_int(table, "recovery", "stale_seconds", 300),
+        check_interval_seconds=_positive_int(
             table,
+            "recovery",
             "check_interval_seconds",
             60,
         ),
-        recovery_observations=_recovery_positive_int(
+        recovery_observations=_positive_int(
             table,
+            "recovery",
             "recovery_observations",
             3,
         ),

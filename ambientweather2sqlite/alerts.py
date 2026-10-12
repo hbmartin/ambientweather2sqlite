@@ -40,6 +40,10 @@ class AlertNotifier:
             self.alert_sent = True
             self._post("station_offline")
 
+    def record_fetch_success(self) -> None:
+        """Reset fetch failures without declaring stored-data recovery."""
+        self.consecutive_failures = 0
+
     def record_success(self) -> None:
         """Reset the failure count, firing station_online after an outage."""
         if self.alert_sent:

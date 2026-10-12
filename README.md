@@ -418,11 +418,11 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
 - If the station's DHCP lease moves it to a new IP, the daemon re-locates it automatically (on by default; disable with `enabled = false` in the `[rediscovery]` config table). After `failure_threshold` consecutive failed fetches (default 2) it rescans the local subnet and verifies the station's identity via the MAC address it recorded from the OS ARP cache after a previous successful fetch, falling back to an "exactly one station found" rule when no MAC data is available. A relocation is logged as a warning and switches the polled URL in memory only - the config file is never modified, so the original URL is used again after a restart. Rescans run at most once every 5 minutes
-- Failed fetches, including warmup timeouts, wait at least one full polling interval before retrying. Receiver HTTP requests from collection, metadata, discovery, and the live API proxy are serialized within the process to reduce overlapping requests
-- A failed database insert is logged and does not reset failure trackers, publish an observation, or print a successful recording
+- Failed fetches, including warmup timeouts, wait at least one full polling interval before retrying. Receiver HTTP requests from collection, metadata, discovery, and the live API proxy are serialized per receiver within the process, including retries. Probes of other LAN hosts can proceed independently
+- Every valid parsed page resets consecutive fetch-failure and rediscovery counters, even when readings are unchanged or an insert fails. Unchanged pages still produce no new observation. A failed database insert is logged and does not publish an observation, print a successful recording, or establish stored-data recovery
 - When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires after the first fresh observation is successfully stored afterward. Webhook errors never interrupt collection. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
 - Sensor-name mappings, labels, and units are persisted in SQLite. The adjacent `<database_stem>_metadata.json` Datasette sidecar is refreshed when new sensor columns appear and can be regenerated offline after a restore (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
-- Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown
+- Press `Ctrl+C` to stop; `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown during startup and collection
 
 ### Database Schema
 
@@ -454,8 +454,26 @@ Recovery is logged only after three distinct, advancing, recent observation
 timestamps have been verified across checks. Repeated pages that produce no new
 rows, repeated checks of the same row, failed inserts, unreadable databases, and
 future timestamps cannot establish recovery. Another stale interval or database
-read error resets partial recovery progress. Existing stale-page detection still
+read error resets partial recovery progress. Invalid and future timestamps are
+reported separately and skipped when choosing the latest usable observation;
+they cannot hide a stall or prevent valid advancing rows from proving recovery.
+If no usable row remains, freshness ages from the last verified timestamp or
+startup time. Stored observations are never rewritten or deleted by monitoring.
+Existing stale-page detection still
 uses the receiver's reported time and sensor values before storing observations.
+
+Unexpected check failures are logged and monitoring continues at its configured
+interval. Notification callback failures are logged without terminating the
+monitor. Shutdown requests stop further checks and new notifications, then wait
+up to one second for the monitor thread. An in-flight SQLite query or callback
+can finish later; a warning records that bounded shutdown wait expiring. Threads
+are not forcibly terminated.
+
+The HTTP health endpoint has a separate purpose and threshold: it returns `503`
+when observations are older than 180 seconds, while the collection monitor's
+outage notification defaults to 300 seconds and uses verified recovery checks.
+See [HTTP health](docs/api.md#get-health-health-check) and
+[monitoring recipes](docs/recipes.md#uptime-monitoring).
 
 Optional settings in `aw2sqlite.toml`:
 
@@ -481,7 +499,7 @@ prediction software must verify that it consumed the fresh observations.
 
 ## HTTP JSON API
 
-When a port is configured, the daemon starts an HTTP server in a background thread with CORS enabled. It binds to `localhost` by default; set `host` (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.
+When a port is configured, the daemon serves HTTP requests concurrently on background threads with CORS enabled. SQLite-only health and metrics requests remain responsive while live requests wait for the receiver; requests to the same receiver are still serialized. It binds to `localhost` by default; set `host` (or pass `--host`) to bind another address, e.g. `0.0.0.0` to serve the local network. When exposing the server, set `auth_token` in the config - every request must then send an `Authorization: Bearer <token>` header or it is rejected with `401`.
 
 | Endpoint | Description |
 |----------|-------------|

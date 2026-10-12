@@ -27,7 +27,7 @@ from tests.discovery_helpers import assert_sensor_identity
 
 
 class TestMetadata(TestCase):
-    @patch("ambientweather2sqlite.metadata.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_solar_metadata_discovery_preserves_values_and_regenerates_offline(
         self,
         mock_get: Mock,
@@ -90,7 +90,7 @@ class TestMetadata(TestCase):
                         [(105.98,)],
                     )
 
-    @patch("ambientweather2sqlite.metadata.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_rain_rate_refresh_preserves_values_and_regenerates_offline(
         self,
         mock_get: Mock,
@@ -192,7 +192,7 @@ class TestMetadata(TestCase):
 
     @patch("ambientweather2sqlite.metadata.extract_units", return_value={})
     @patch("ambientweather2sqlite.metadata.extract_labels", return_value={})
-    @patch("ambientweather2sqlite.metadata.mureq.get", return_value="html")
+    @patch("ambientweather2sqlite.station_http.mureq.get", return_value="html")
     def test_empty_labels_preserve_existing_sidecar(
         self,
         mock_get: Mock,
@@ -254,7 +254,7 @@ class TestMetadata(TestCase):
             self.assertIsNone(result)
             self.assertEqual(path.read_text(encoding="utf-8"), "original")
 
-    @patch("ambientweather2sqlite.metadata.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_create_metadata_handles_network_failures(self, mock_get: Mock) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / "weather.db")
@@ -272,7 +272,7 @@ class TestMetadata(TestCase):
 
     @patch("ambientweather2sqlite.metadata.extract_units")
     @patch("ambientweather2sqlite.metadata.extract_labels")
-    @patch("ambientweather2sqlite.metadata.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_create_metadata_skips_missing_units_without_crashing(
         self,
         mock_get: Mock,
@@ -305,7 +305,7 @@ class TestMetadata(TestCase):
         "ambientweather2sqlite.metadata.extract_labels",
         return_value={"newSensor": "New Sensor"},
     )
-    @patch("ambientweather2sqlite.metadata.mureq.get", return_value="html")
+    @patch("ambientweather2sqlite.station_http.mureq.get", return_value="html")
     def test_online_refresh_keeps_previously_persisted_sensors(
         self,
         mock_get: Mock,
@@ -339,7 +339,7 @@ class TestMetadata(TestCase):
 
     @patch("ambientweather2sqlite.metadata.extract_units")
     @patch("ambientweather2sqlite.metadata.extract_labels")
-    @patch("ambientweather2sqlite.metadata.mureq.get")
+    @patch("ambientweather2sqlite.station_http.mureq.get")
     def test_metadata_uses_physical_columns_and_regenerates_offline(
         self,
         mock_get: Mock,

@@ -152,6 +152,15 @@ Home Assistant statistics.
 seconds, so any check that treats non-2xx as failure will catch stalled
 collection without custom parsing.
 
+Health requests can proceed while `GET /` waits or retries against the receiver.
+The embedded collection monitor separately defaults to a 300-second outage
+threshold; an existing stale database alerts immediately after restart, while
+an empty database receives startup grace. Valid unchanged pages reset network
+failure counters but do not establish stored-data recovery. See
+[API health semantics](api.md#get-health-health-check) and the
+[collection monitor](https://github.com/hbmartin/ambientweather2sqlite#embedded-collection-recovery-monitor)
+for verified recovery, rejected timestamps, and bounded shutdown behavior.
+
 Container healthcheck:
 
 ```yaml
