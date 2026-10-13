@@ -1,29 +1,18 @@
 """Serialize HTTP requests by normalized receiver hostname within one process."""
 
-import ipaddress
 from http.client import HTTPException
 from threading import Lock
-from typing import cast
 from weakref import WeakValueDictionary
 
 from . import mureq
-from .http_validation import parse_http_url
+from .http_validation import normalized_http_host
 
 _REGISTRY_LOCK = Lock()
 _RECEIVER_LOCKS: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 
 
-def _receiver_address(url: str) -> str:
-    parsed = parse_http_url(url)
-    host = cast("str", parsed.hostname)
-    try:
-        return str(ipaddress.ip_address(host))
-    except (ValueError,):  # noqa: B013
-        return host.encode("idna").decode("ascii").lower()
-
-
 def _receiver_lock(url: str) -> Lock:
-    address = _receiver_address(url)
+    address = normalized_http_host(url)
     with _REGISTRY_LOCK:
         request_lock = _RECEIVER_LOCKS.get(address)
         if request_lock is None:

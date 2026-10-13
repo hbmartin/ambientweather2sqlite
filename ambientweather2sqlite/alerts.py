@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.client import HTTPException
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from . import mureq
@@ -31,6 +32,11 @@ class AlertNotifier:
     consecutive_failures: int = 0
     alert_sent: bool = False
     _pending_failure_peak: int = field(default=0, init=False)
+    _validated_webhook_url: str | None = field(default=None, init=False)
+    _webhook_url_valid: bool = field(default=False, init=False)
+    _webhook_validation_lock: Lock = field(
+        default_factory=Lock, init=False, repr=False, compare=False
+    )
 
     def record_failure(self) -> None:
         """Count a failed fetch, firing station_offline at the threshold."""
@@ -91,13 +97,28 @@ class AlertNotifier:
             }
         )
 
+    def _webhook_is_valid(self, url: str) -> bool:
+        with self._webhook_validation_lock:
+            if url != self._validated_webhook_url:
+                self._validated_webhook_url = url
+                self._webhook_url_valid = False
+                try:
+                    parse_http_url(url)
+                except (ValueError,) as error:  # noqa: B013
+                    self.logger.warning("Alert webhook failed: %s", error)
+                else:
+                    self._webhook_url_valid = True
+            return self._webhook_url_valid
+
     def _send(self, payload: dict[str, object]) -> None:
+        config = self.config
+        if not self._webhook_is_valid(config.webhook_url):
+            return
         try:
-            parse_http_url(self.config.webhook_url)
             mureq.post(
-                self.config.webhook_url,
+                config.webhook_url,
                 json=payload,
-                timeout=self.config.timeout_seconds,
+                timeout=config.timeout_seconds,
             )
         except (HTTPException, OSError, TimeoutError, ValueError) as e:
             self.logger.warning("Alert webhook failed: %s", e)

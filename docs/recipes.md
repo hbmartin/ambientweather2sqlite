@@ -154,11 +154,13 @@ collection without custom parsing.
 
 Health requests can proceed while `GET /` waits or retries against the receiver.
 Malformed configured station and webhook URLs are rejected before collection
-starts without DNS or network requests. Both require HTTP/HTTPS, valid hostname
-syntax, and ports in `1–65535` when supplied; raw whitespace and ASCII control
+starts without DNS or network requests. Both require case-insensitive HTTP/HTTPS
+schemes, valid hostname syntax, and ports in `1–65535` when supplied;
+raw whitespace and ASCII control
 characters are rejected before parsing can strip them. Valid URLs remain
-unchanged. Runtime invalid-URL diagnostics are separate from
-receiver request failures, including invalid UTF-8 responses; runtime errors
+unchanged. Numeric port-range failures consistently report
+`URL port must be between 1 and 65535`. Runtime invalid-URL diagnostics are
+separate from receiver request failures, including invalid UTF-8 responses; runtime errors
 continue through the normal retry path.
 The embedded collection monitor separately defaults to a 300-second outage
 threshold; an existing stale database alerts immediately after restart, while
@@ -182,6 +184,10 @@ observation and reports the largest consecutive fetch-failure streak while the
 offline notification was pending. Unchanged valid pages and failed inserts reset
 the current network counter without erasing that outage history. Expected webhook
 validation and delivery failures are logged without stopping collection.
+Each notifier caches validation of its current URL. For a malformed URL supplied
+directly through `AlertConfig`, concurrent events produce one warning and skip
+delivery while that URL remains unchanged. Changing the URL triggers validation
+again. Transport failures for valid URLs are logged on each failed attempt.
 During shutdown, Python SIGTERM handlers are restored; opaque native handlers
 are left untouched.
 A startup warning reports when graceful SIGTERM shutdown depends on that native

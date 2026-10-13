@@ -1,8 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPException
+from threading import Event
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from ambientweather2sqlite.alerts import AlertNotifier
+from ambientweather2sqlite.http_validation import parse_http_url
 from ambientweather2sqlite.models import AlertConfig
 
 _CONFIG = AlertConfig(
@@ -144,11 +147,144 @@ class TestAlertNotifier(TestCase):
                     notifier.record_success()
                     for event in ("collection_stalled", "collection_resumed"):
                         notifier.collection_event(event, None, 300.0)
-                self.assertEqual(logger.warning.call_count, 4)
+                logger.warning.assert_called_once()
                 self.assertFalse(notifier.alert_sent)
                 self.assertEqual(notifier.consecutive_failures, 0)
                 post.assert_not_called()
                 dns.assert_not_called()
+
+    def test_validation_is_cached_and_refreshes_when_the_url_changes(self) -> None:
+        notifier = AlertNotifier(
+            AlertConfig("http://", failure_threshold=1), "http://station.local/", Mock()
+        )
+        with (
+            patch(
+                "ambientweather2sqlite.alerts.parse_http_url", wraps=parse_http_url
+            ) as validate,
+            patch("ambientweather2sqlite.mureq.post") as post,
+        ):
+            notifier.record_failure()
+            notifier.record_fetch_success()
+            notifier.record_success()
+            notifier.collection_event("collection_stalled", None, 300)
+            self.assertEqual(validate.call_count, 1)
+            notifier.logger.warning.assert_called_once()
+            post.assert_not_called()
+
+            notifier.config = AlertConfig("ftp://hooks.local/", failure_threshold=1)
+            notifier.collection_event("collection_resumed", None, 0)
+            self.assertEqual(validate.call_count, 2)
+            self.assertEqual(notifier.logger.warning.call_count, 2)
+
+            notifier.config = AlertConfig(
+                "HTTP://hooks.local/alert", failure_threshold=1
+            )
+            notifier.record_failure()
+            notifier.record_success()
+            self.assertEqual(validate.call_count, 3)
+            self.assertEqual(post.call_count, 2)
+            self.assertEqual(
+                [
+                    (
+                        call.kwargs["json"]["event"],
+                        call.kwargs["json"]["consecutive_failures"],
+                    )
+                    for call in post.call_args_list
+                ],
+                [("station_offline", 1), ("station_online", 1)],
+            )
+            self.assertTrue(
+                all(
+                    call.args == ("HTTP://hooks.local/alert",)
+                    for call in post.call_args_list
+                )
+            )
+            notifier.config = AlertConfig("http://", failure_threshold=1)
+            notifier.collection_event("collection_stalled", None, 300)
+            self.assertEqual(validate.call_count, 4)
+            self.assertEqual(notifier.logger.warning.call_count, 3)
+        self.assertFalse(notifier.alert_sent)
+        self.assertEqual(notifier.consecutive_failures, 0)
+
+    def test_concurrent_invalid_events_validate_and_warn_once(self) -> None:
+        entered = Event()
+        second_started = Event()
+        release = Event()
+        logger = Mock()
+        notifier = AlertNotifier(
+            AlertConfig("http://"),
+            "http://station.local/",
+            logger,
+            consecutive_failures=7,
+            alert_sent=True,
+        )
+
+        def validate(url: str) -> None:
+            entered.set()
+            if not release.wait(timeout=2):
+                raise AssertionError("Validation was not released")
+            parse_http_url(url)
+
+        def second_event() -> None:
+            second_started.set()
+            notifier.collection_event("collection_resumed", None, 0)
+
+        with (
+            patch(
+                "ambientweather2sqlite.alerts.parse_http_url", side_effect=validate
+            ) as parse,
+            patch("ambientweather2sqlite.mureq.post") as post,
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(
+                notifier.collection_event, "collection_stalled", None, 300
+            )
+            try:
+                self.assertTrue(entered.wait(timeout=2))
+                second = executor.submit(second_event)
+                self.assertTrue(second_started.wait(timeout=2))
+            finally:
+                release.set()
+            first.result(timeout=2)
+            second.result(timeout=2)
+        parse.assert_called_once_with("http://")
+        logger.warning.assert_called_once()
+        post.assert_not_called()
+        self.assertTrue(notifier.alert_sent)
+        self.assertEqual(notifier.consecutive_failures, 7)
+
+    def test_validation_lock_does_not_serialize_deliveries(self) -> None:
+        entered = Event()
+        release = Event()
+        notifier, _ = _make_notifier()
+
+        def post(_url: str, *, json: dict[str, object], timeout: float) -> None:
+            self.assertEqual(timeout, _CONFIG.timeout_seconds)
+            if json["event"] == "collection_stalled":
+                entered.set()
+                if not release.wait(timeout=2):
+                    raise AssertionError("Delivery was not released")
+
+        with (
+            patch("ambientweather2sqlite.mureq.post", side_effect=post),
+            patch(
+                "ambientweather2sqlite.alerts.parse_http_url", wraps=parse_http_url
+            ) as validate,
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(
+                notifier.collection_event, "collection_stalled", None, 300
+            )
+            try:
+                self.assertTrue(entered.wait(timeout=2))
+                second = executor.submit(
+                    notifier.collection_event, "collection_resumed", None, 0
+                )
+                second.result(timeout=2)
+            finally:
+                release.set()
+            first.result(timeout=2)
+        validate.assert_called_once_with(_CONFIG.webhook_url)
 
     def test_transport_value_errors_preserve_outage_counts_and_request_arguments(
         self,

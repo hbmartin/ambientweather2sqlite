@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import MagicMock, Mock, patch
 
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from ambientweather2sqlite.database import (
@@ -23,6 +23,14 @@ from ambientweather2sqlite.models import RecoveryConfig
 from ambientweather2sqlite.recovery import CollectionMonitor
 
 _NOW = datetime(2026, 10, 12, 16, tzinfo=UTC)
+
+
+def _clock_representation(value: datetime, style: str, offset_minutes: int) -> datetime:
+    if style == "naive":
+        return value.replace(tzinfo=None)
+    if style == "utc":
+        return value
+    return value.astimezone(timezone(timedelta(minutes=offset_minutes)))
 
 
 class TestMonitorReview(TestCase):
@@ -144,13 +152,13 @@ class TestMonitorReview(TestCase):
                 "2026-10-13 16:00:00",
             )
 
+    @settings(deadline=None)
     @given(
         offset_minutes=st.integers(min_value=-1439, max_value=1439),
         naive=st.booleans(),
-        naive_start=st.booleans(),
     )
     def test_clock_representation_does_not_change_selected_timestamp(
-        self, *, offset_minutes: int, naive: bool, naive_start: bool
+        self, *, offset_minutes: int, naive: bool
     ) -> None:
         insert_observation(
             self.database, {"ts": (_NOW - timedelta(microseconds=1)).isoformat()}
@@ -169,19 +177,71 @@ class TestMonitorReview(TestCase):
                 _NOW,
             ),
         )
-        start = (
-            _NOW.replace(tzinfo=None)
-            if naive_start
-            else _NOW.astimezone(timezone(timedelta(minutes=-offset_minutes)))
-        )
         logger = Mock()
         monitor = CollectionMonitor(
-            self.database, RecoveryConfig(), logger, started_at=start
+            self.database, RecoveryConfig(), logger, started_at=_NOW
         )
         monitor.check(supplied)
         self.assertFalse(monitor.stalled)
         logger.error.assert_not_called()
-        self.assertEqual(monitor.started_at, start)
+
+    @settings(deadline=None)
+    @given(
+        start_style=st.sampled_from(("naive", "utc", "offset")),
+        check_style=st.sampled_from(("naive", "utc", "offset")),
+        start_offset=st.integers(min_value=-1439, max_value=1439),
+        check_offset=st.integers(min_value=-1439, max_value=1439),
+        age=st.one_of(st.sampled_from((0, 299, 300, 301, 600)), st.integers(0, 600)),
+        future_only=st.booleans(),
+    )
+    def test_fallback_age_is_independent_of_start_and_check_representations(
+        self,
+        *,
+        start_style: str,
+        check_style: str,
+        start_offset: int,
+        check_offset: int,
+        age: int,
+        future_only: bool,
+    ) -> None:
+        start = _clock_representation(
+            _NOW - timedelta(seconds=age), start_style, start_offset
+        )
+        supplied = _clock_representation(_NOW, check_style, check_offset)
+        with tempfile.TemporaryDirectory() as directory:
+            database = str(Path(directory) / "weather.db")
+            create_database_if_not_exists(database)
+            if future_only:
+                insert_observation(
+                    database, {"ts": (_NOW + timedelta(days=1)).isoformat()}
+                )
+            with closing(sqlite3.connect(database)) as connection:
+                before = connection.execute("SELECT ts FROM observations").fetchall()
+            logger = Mock()
+            events = Mock()
+            monitor = CollectionMonitor(
+                database, RecoveryConfig(), logger, events, started_at=start
+            )
+            with patch(
+                "ambientweather2sqlite.database.metrics.datetime", wraps=datetime
+            ) as clock:
+                monitor.check(supplied)
+                clock.now.assert_not_called()
+            self.assertEqual(monitor.stalled, age >= monitor.config.stale_seconds)
+            self.assertFalse(monitor._database_error)
+            self.assertEqual(monitor._timestamp_error, future_only)
+            self.assertIsNone(monitor._last_verified_timestamp)
+            self.assertIs(monitor.started_at, start)
+            if monitor.stalled:
+                events.assert_called_once_with("collection_stalled", None, float(age))
+            else:
+                events.assert_not_called()
+            self.assertEqual(
+                logger.error.call_count, int(future_only) + int(monitor.stalled)
+            )
+            with closing(sqlite3.connect(database)) as connection:
+                after = connection.execute("SELECT ts FROM observations").fetchall()
+            self.assertEqual(after, before)
 
     def test_first_row_is_fetched_before_clock_and_older_rows_stay_unread(self) -> None:
         phases: list[str] = []

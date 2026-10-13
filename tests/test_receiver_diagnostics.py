@@ -37,6 +37,8 @@ _INVALID_URLS = (
     "http://station.local/\x7f",
 )
 _SUPPORTED_URLS = (
+    "HTTP://Observer.LOCAL/livedata.htm",
+    "hTtPs://station.local:8080/live?raw=1#top",
     "http://Observer.LOCAL:8080/livedata.htm?raw=1#top",
     "https://127.0.0.1/livedata.htm",
     "http://[2001:0db8:0:0:0:0:0:1]:8080/live",
@@ -60,6 +62,40 @@ def _write_config(directory: str, url: str, extra: str = "") -> Path:
 
 
 class TestReceiverConfiguration(TestCase):
+    def test_validation_diagnostics_keep_field_names_and_scheme_messages(self) -> None:
+        cases = (
+            ("FTP://station.local/", "must start with http:// or https://"),
+            ("station.local/live", "must start with http:// or https://"),
+            (
+                "HTTP://station.local:0/",
+                "is invalid: URL port must be between 1 and 65535",
+            ),
+            (
+                "https://station.local:65536/",
+                "is invalid: URL port must be between 1 and 65535",
+            ),
+            ("http://station.local:invalid/", "is invalid: Port could not be cast"),
+        )
+        for field in ("live_data_url", "alerts.webhook_url"):
+            for url, diagnostic in cases:
+                with (
+                    self.subTest(field=field, url=url),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    path = _write_config(
+                        directory,
+                        url if field == "live_data_url" else "http://station.local/",
+                        f"[alerts]\nwebhook_url = {json.dumps(url)}\n"
+                        if field == "alerts.webhook_url"
+                        else "",
+                    )
+                    with self.assertRaises(ValueError) as raised:
+                        load_config(path)
+                    self.assertTrue(
+                        str(raised.exception).startswith(f"{field} {diagnostic}")
+                    )
+                    self.assertIsInstance(raised.exception.__cause__, ValueError)
+
     def test_malformed_configuration_exits_before_startup_or_network(self) -> None:
         for url in (*_INVALID_URLS, "ftp://station.local/live", "station.local/live"):
             with self.subTest(url=url), tempfile.TemporaryDirectory() as directory:
@@ -138,7 +174,7 @@ class TestReceiverConfiguration(TestCase):
 
     @given(
         host=st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=1, max_size=30),
-        scheme=st.sampled_from(("http", "https")),
+        scheme=st.sampled_from(("http", "https", "HTTP", "HTTPS", "HtTp", "hTtPs")),
         port=st.integers(min_value=1, max_value=65535),
     )
     def test_valid_configuration_preserves_url_spelling(
@@ -157,6 +193,15 @@ class TestReceiverConfiguration(TestCase):
 
 
 class TestReceiverResponseErrors(TestCase):
+    def test_supported_urls_reach_transport_without_rewriting(self) -> None:
+        for url in _SUPPORTED_URLS:
+            with self.subTest(url=url):
+                with patch(
+                    "ambientweather2sqlite.mureq.get", return_value=_PAGE
+                ) as get:
+                    self.assertEqual(station_get(url, timeout=1.5), _PAGE)
+                get.assert_called_once_with(url, auto_retry=False, timeout=1.5)
+
     def test_malformed_webhook_does_not_stop_retries_or_committed_recovery(
         self,
     ) -> None:
@@ -195,7 +240,7 @@ class TestReceiverResponseErrors(TestCase):
         self.assertEqual(wait.call_count, 3)
         insert.assert_called_once()
         post.assert_not_called()
-        self.assertEqual(logger.warning.call_count, 2)
+        self.assertEqual(logger.warning.call_count, 1)
         self.assertFalse(notifier.alert_sent)
         self.assertEqual(notifier.consecutive_failures, 0)
 

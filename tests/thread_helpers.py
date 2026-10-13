@@ -12,7 +12,7 @@ def run_worker(action: Callable[[], None], *, timeout: float = 2) -> None:
     def run() -> None:
         try:
             action()
-        except (Exception,) as error:  # noqa: BLE001, B013
+        except (BaseException,) as error:  # noqa: BLE001, B013
             result.set_exception(error)
         else:
             result.set_result(None)

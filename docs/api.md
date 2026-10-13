@@ -24,16 +24,24 @@ no admission limit, shared-fetch response, or separate queue timeout. Existing
 transport timeouts and retry behavior apply after acquiring the lock; DNS
 resolution remains the transport's responsibility. Configuration loading rejects
 structurally malformed `live_data_url` and `alerts.webhook_url` values before
-startup without DNS or network requests. HTTP/HTTPS, a valid hostname, and ports
-in `1–65535` are required when supplied; raw whitespace and ASCII control
-characters are rejected before parsing. Valid URL strings and percent-encoded
-path/query characters are preserved. At runtime, unsupported schemes and other
-URL validation failures are reported as
+startup without DNS or network requests. HTTP/HTTPS schemes are case-insensitive.
+A valid hostname is required, and any supplied port must be in `1–65535`.
+Raw whitespace and ASCII control characters are rejected before parsing.
+Valid URL strings and percent-encoded path/query characters are preserved.
+Numeric port-range failures consistently
+report `URL port must be between 1 and 65535`; nonnumeric ports have separate
+diagnostics. At runtime, unsupported schemes and other URL validation failures
+are reported as
 `Invalid receiver URL`; UTF-8 response-decoding failures use
 `Receiver request failed`. Existing timeout and network diagnostics still apply,
 and runtime failures remain recoverable.
 Expected webhook validation and delivery failures are logged without stopping
 collection, including when an application constructs `AlertConfig` directly.
+Each notifier caches validation for its current exact webhook URL. Invalid URLs
+warn once and skip delivery while unchanged, including across concurrent events.
+Replacing the URL triggers validation again. Validation does not serialize
+webhook requests, and valid-URL transport failures are logged for each failed
+attempt.
 
 `rainofhourly` is the ObserverIP **Hourly Rain Rate**, measured in inches/hour
 or millimeters/hour according to the station's rainfall setting. Its metadata

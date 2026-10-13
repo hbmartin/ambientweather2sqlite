@@ -2,8 +2,11 @@ import tomllib
 from pathlib import Path
 from typing import overload
 
-from .http_validation import parse_http_url
-from .http_validation import validate_port as _validate_port
+from .http_validation import (
+    UnsupportedHttpSchemeError,
+    parse_http_url,
+    validate_port,
+)
 from .models import (
     AlertConfig,
     AppConfig,
@@ -116,19 +119,15 @@ def _optional_float(
 
 
 def _validate_url(value: str, key: str) -> str:
-    if not value.startswith(("http://", "https://")):
-        msg = f"{key} must start with http:// or https://"
-        raise ValueError(msg)
     try:
         parse_http_url(value)
+    except (UnsupportedHttpSchemeError,) as error:  # noqa: B013
+        msg = f"{key} must start with http:// or https://"
+        raise ValueError(msg) from error
     except (ValueError,) as error:  # noqa: B013
         msg = f"{key} is invalid: {error}"
         raise ValueError(msg) from error
     return value
-
-
-def _validate_receiver_url(value: str) -> str:
-    return _validate_url(value, "live_data_url")
 
 
 def _require_table(value: object, key: str) -> dict[str, object]:
@@ -143,7 +142,7 @@ def _optional_mqtt(config_data: dict[str, object]) -> MqttConfig | None:
         return None
     mqtt_table = _require_table(mqtt_data, "mqtt")
     mqtt_port = _optional_int(mqtt_table, "port", default=1883)
-    _validate_port(mqtt_port, "mqtt.port")
+    validate_port(mqtt_port, "mqtt.port")
     return MqttConfig(
         host=_require_str(mqtt_table, "host"),
         topic=_require_str(mqtt_table, "topic"),
@@ -237,11 +236,11 @@ def _optional_recovery(config_data: dict[str, object]) -> RecoveryConfig:
 def load_config(config_path: Path) -> AppConfig:
     config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     return AppConfig(
-        live_data_url=_validate_receiver_url(
-            _require_str(config_data, "live_data_url"),
+        live_data_url=_validate_url(
+            _require_str(config_data, "live_data_url"), "live_data_url"
         ),
         database_path=_require_str(config_data, "database_path"),
-        port=_validate_port(_optional_int(config_data, "port"), "port"),
+        port=validate_port(_optional_int(config_data, "port"), "port"),
         log_format=_optional_log_format(config_data),
         host=_optional_str(config_data, "host", "localhost"),
         auth_token=_optional_str_or_none(config_data, "auth_token"),
