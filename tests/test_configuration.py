@@ -1,14 +1,24 @@
 import tempfile
+import tomllib
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from ambientweather2sqlite import configuration
 from ambientweather2sqlite.configuration import load_config
 from ambientweather2sqlite.models import AppConfig, RecoveryConfig
+
+
+class TestTomlStrings(TestCase):
+    @given(value=st.text(alphabet=st.characters(exclude_categories=("Cs",))))
+    @example(value='\x00\b\f\n\r\t\x1f\x7f"\\')
+    @example(value='気象🌧️ "rain" ' + r"\u0061\n\t")
+    def test_encoded_strings_round_trip_through_toml(self, value: str) -> None:
+        encoded = configuration._toml_string(value)  # noqa: SLF001
+        self.assertEqual(tomllib.loads(f"value = {encoded}")["value"], value)
 
 
 class TestRecoveryConfiguration(TestCase):
@@ -612,11 +622,20 @@ class TestConfiguration(TestCase):
         self,
     ) -> None:
         invalid_urls = (
-            ("httpfoo", "live_data_url must start with http:// or https://"),
-            ("http://", "live_data_url is invalid: URL is missing a hostname"),
-            ("http://station.local:0/", "URL port must be between 1 and 65535"),
-            ("http://station.local:abc:70000/", "Port could not be cast"),
-            ("http://station local/", "whitespace or ASCII control characters"),
+            ("httpfoo", "Live data URL must start with http:// or https://"),
+            ("http://", "Invalid live data URL: URL is missing a hostname"),
+            (
+                "http://station.local:0/",
+                "Invalid live data URL: URL port must be between 1 and 65535",
+            ),
+            (
+                "http://station.local:abc:70000/",
+                "Invalid live data URL: Port could not be cast",
+            ),
+            (
+                "http://station local/",
+                "Invalid live data URL: URL must not contain whitespace or ASCII control characters",
+            ),
         )
         for url in (
             "HTTP://Observer.LOCAL:8080/live?raw=1#top",
@@ -630,6 +649,8 @@ class TestConfiguration(TestCase):
                         "builtins.input",
                         side_effect=[
                             "n",
+                            "",
+                            "  \t  ",
                             *(invalid for invalid, _ in invalid_urls),
                             f"  {url}  ",
                             "/tmp/weather.db",
@@ -643,7 +664,7 @@ class TestConfiguration(TestCase):
                 ):
                     created = configuration.create_config_file(output_path)
                     config = load_config(created)
-                self.assertEqual(prompt.call_count, len(invalid_urls) + 4)
+                self.assertEqual(prompt.call_count, len(invalid_urls) + 6)
                 self.assertEqual(config.live_data_url, url)
                 self.assertIn(
                     f'live_data_url = "{url}"', created.read_text(encoding="utf-8")
@@ -654,6 +675,49 @@ class TestConfiguration(TestCase):
                     diagnostics[2:], invalid_urls, strict=True
                 ):
                     self.assertIn(expected, actual)
+                for operation in (dns, lock, get, post):
+                    operation.assert_not_called()
+
+    def test_setup_strings_survive_toml_and_config_loading(self) -> None:
+        cases = (
+            ('http://station.local/live?name="rain"', '/tmp/weather"station".db'),
+            (r"http://station.local/live\weather?name=\path", r"C:\Weather\station.db"),
+            (r"http://station.local/live?name=\u0061\n\t", r"/tmp/\u0061\n\t.db"),
+            ("HTTP://BÜCHER.local/気象🌧️?name=☀️", "/tmp/気象🌧️.db"),
+            (
+                'https://station.local/🌧️?name="rain"' + r"\u0061",
+                'weather"🌧️\\\x00\x01\b\f\n\r\t\x1f\x7f.db',
+            ),
+        )
+        for url, database_path in cases:
+            with self.subTest(url=url), tempfile.TemporaryDirectory() as directory:
+                output_path = Path(directory) / "aw2sqlite.toml"
+                with (
+                    patch(
+                        "builtins.input",
+                        side_effect=[
+                            "n",
+                            f"  {url}  ",
+                            f"  {database_path}  ",
+                            "8080",
+                        ],
+                    ),
+                    patch("builtins.print") as output,
+                    patch("socket.getaddrinfo") as dns,
+                    patch("ambientweather2sqlite.station_http._receiver_lock") as lock,
+                    patch("ambientweather2sqlite.mureq.get") as get,
+                    patch("ambientweather2sqlite.mureq.post") as post,
+                ):
+                    created = configuration.create_config_file(output_path)
+                    parsed = tomllib.loads(created.read_text(encoding="utf-8"))
+                    loaded = load_config(created)
+                self.assertEqual(created, output_path)
+                self.assertEqual(parsed["live_data_url"], url)
+                self.assertEqual(parsed["database_path"], database_path)
+                self.assertEqual(loaded.live_data_url, url)
+                self.assertEqual(loaded.database_path, database_path)
+                self.assertEqual(loaded.port, 8080)
+                self.assertEqual(output.call_count, 2)
                 for operation in (dns, lock, get, post):
                     operation.assert_not_called()
 

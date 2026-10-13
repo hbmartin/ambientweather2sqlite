@@ -161,8 +161,10 @@ characters are rejected before parsing can strip them. Valid URLs remain
 unchanged. Numeric port-range failures consistently report
 `URL port must be between 1 and 65535`; malformed nonnumeric ports such as
 `abc:70000` report `Port could not be cast to integer value`. Manual URL entry
-during setup uses the same validation and explains invalid entries before
-prompting again; mixed-case HTTP/HTTPS schemes are accepted.
+during setup uses the same validation, accepts mixed-case HTTP/HTTPS schemes,
+and explains invalid nonblank entries; blank entries silently prompt again.
+Generated TOML preserves accepted URLs and database paths through string
+escaping; see [setup guidance](https://github.com/hbmartin/ambientweather2sqlite#configuration).
 Runtime invalid-URL diagnostics are
 separate from receiver request failures, including invalid UTF-8 responses; runtime errors
 continue through the normal retry path.

@@ -6,7 +6,8 @@ from threading import Thread
 from time import monotonic
 
 
-def run_worker(action: Callable[[], None], *, timeout: float = 2) -> None:
+def start_worker(action: Callable[[], None]) -> tuple[Thread, Future[None]]:
+    """Start a daemon worker and capture its original result or exception."""
     result: Future[None] = Future()
 
     def run() -> None:
@@ -18,8 +19,13 @@ def run_worker(action: Callable[[], None], *, timeout: float = 2) -> None:
             result.set_result(None)
 
     thread = Thread(target=run, daemon=True)
-    deadline = monotonic() + timeout
     thread.start()
+    return thread, result
+
+
+def run_worker(action: Callable[[], None], *, timeout: float = 2) -> None:
+    deadline = monotonic() + timeout
+    thread, result = start_worker(action)
     try:
         result.result(timeout=timeout)
     finally:

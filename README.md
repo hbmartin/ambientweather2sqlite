@@ -305,9 +305,12 @@ On the first run, if no config file is found, you will be guided through an inte
 4. **Output TOML Filename** - defaults to `./aw2sqlite.toml`
 
 Manual URL entry uses the same validation as configuration loading. HTTP/HTTPS
-schemes are case-insensitive, and invalid entries display the reason before
-prompting again. Accepted URL spelling is preserved after trimming surrounding
-whitespace.
+schemes are case-insensitive. Blank entries silently prompt again; invalid
+nonblank entries display the reason using the name "Live data URL".
+Accepted URL spelling and database paths are preserved after trimming
+surrounding whitespace. The generated TOML escapes quotes, backslashes, and
+control characters, so loading it restores those exact values, including
+Unicode.
 
 ### Config File
 

@@ -1,3 +1,4 @@
+import json
 import tomllib
 from pathlib import Path
 from typing import overload
@@ -281,10 +282,16 @@ def _prompt_manual_url() -> str:
         ambient_url = input(
             "Enter AmbientWeather Live Data URL: (e.g. http://192.168.0.226/livedata.htm)\n",
         ).strip()
+        if not ambient_url:
+            continue
         try:
-            return _validate_url(ambient_url, "live_data_url")
+            parse_http_url(ambient_url)
+        except (UnsupportedHttpSchemeError,):  # noqa: B013
+            print("Live data URL must start with http:// or https://")
         except (ValueError,) as error:  # noqa: B013
-            print(error)
+            print(f"Invalid live data URL: {error}")
+        else:
+            return ambient_url
 
 
 def _prompt_for_url() -> str:
@@ -312,6 +319,11 @@ def _prompt_for_url() -> str:
             break
 
     return _prompt_manual_url()
+
+
+def _toml_string(value: str) -> str:
+    """Encode a Unicode string as a TOML basic string."""
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", r"\u007f")
 
 
 def create_config_file(
@@ -348,7 +360,10 @@ def create_config_file(
         if output_path_input:
             output_path = Path(output_path_input)
 
-    config = f'live_data_url = "{ambient_url}"\ndatabase_path = "{database_path}"\n'
+    config = (
+        f"live_data_url = {_toml_string(ambient_url)}\n"
+        f"database_path = {_toml_string(database_path)}\n"
+    )
     if port:
         config += f"port = {port}\n"
     if not overwrite_existing and output_path.exists():
