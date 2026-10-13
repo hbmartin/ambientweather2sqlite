@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from .database.metrics import _query_monitor_timestamp
+from .time_utils import normalize_utc
 
 if TYPE_CHECKING:
     import logging
@@ -21,12 +22,7 @@ type CollectionEvent = Callable[[str, str | None, float], None]
 
 
 def _observation_age(latest: datetime, now: datetime) -> float:
-    latest = (
-        latest.replace(tzinfo=UTC)
-        if latest.utcoffset() is None
-        else latest.astimezone(UTC)
-    )
-    age = (now - latest).total_seconds()
+    age = (now - normalize_utc(latest)).total_seconds()
     if age < 0:
         msg = "latest observation timestamp is in the future"
         raise ValueError(msg)

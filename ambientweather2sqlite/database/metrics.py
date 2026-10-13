@@ -8,12 +8,13 @@ from itertools import chain, pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ambientweather2sqlite.time_utils import normalize_utc
+
 from .connection import (
     _DEFAULT_TABLE_NAME,
     _TS_COL,
     _connect_database,
     _format_sqlite_timestamp,
-    _is_timezone_aware,
     _parse_stored_timestamp,
 )
 
@@ -28,9 +29,7 @@ DEFAULT_GAP_THRESHOLD_SECONDS = 180.0
 def _normalize_current_time(now: datetime | None) -> datetime:
     if now is None:
         return datetime.now(UTC)
-    if not _is_timezone_aware(now):
-        return now.replace(tzinfo=UTC)
-    return now.astimezone(UTC)
+    return normalize_utc(now)
 
 
 def query_db_metrics(db_path: str) -> DbMetrics:

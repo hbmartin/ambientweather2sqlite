@@ -27,13 +27,13 @@ from ambientweather2sqlite.database import (
     insert_observation,
 )
 from ambientweather2sqlite.database.metrics import _query_monitor_timestamp
+from ambientweather2sqlite.http_validation import normalized_http_host
 from ambientweather2sqlite.models import AlertConfig, RecoveryConfig, RediscoveryConfig
 from ambientweather2sqlite.recovery import CollectionMonitor, monitor_collection
 from ambientweather2sqlite.rediscovery import StationRediscovery
 from ambientweather2sqlite.server import Server
 from ambientweather2sqlite.station_http import (
     _RECEIVER_LOCKS,
-    _receiver_address,
     _receiver_lock,
     station_get,
 )
@@ -586,13 +586,15 @@ class TestReceiverConcurrency(TestCase):
             self.assertIs(first, _receiver_lock("http://observer.local/station.htm"))
             self.assertIsNot(first, _receiver_lock(_STATION_URL))
             dns.assert_not_called()
-        self.assertEqual(_receiver_address("http://[2001:0db8::1]/"), "2001:db8::1")
+        self.assertEqual(normalized_http_host("http://[2001:0db8::1]/"), "2001:db8::1")
 
     def test_unused_receiver_locks_are_released(self) -> None:
-        receiver = _receiver_lock(_STATION_URL)
-        self.assertIn("192.0.2.10", _RECEIVER_LOCKS)
+        # Earlier request exceptions can retain their host's lock in tracebacks.
+        host = "unused-receiver.example"
+        receiver = _receiver_lock(f"http://{host}/")
+        self.assertIn(host, _RECEIVER_LOCKS)
         del receiver
-        self.assertNotIn("192.0.2.10", _RECEIVER_LOCKS)
+        self.assertNotIn(host, _RECEIVER_LOCKS)
 
     def test_unrelated_receiver_can_fetch_while_station_lock_is_held(self) -> None:
         entered = threading.Event()

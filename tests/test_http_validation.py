@@ -6,12 +6,75 @@ from unittest.mock import patch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from ambientweather2sqlite.http_validation import parse_http_url, validate_port
+from ambientweather2sqlite import http_validation
+from ambientweather2sqlite.http_validation import (
+    UnsupportedHttpSchemeError,
+    normalized_http_host,
+    parse_http_url,
+    validate_port,
+)
+from ambientweather2sqlite.station_http import station_get
 
 _MAX_TCP_PORT = 65535
 
 
 class TestHttpValidation(TestCase):
+    def test_numeric_port_range_errors_use_the_supported_range(self) -> None:
+        for host in ("station.local", "[::1]", "user:password@station.local"):
+            for port in ("0", "65536", "00065536", "9" * 5000):
+                with self.subTest(host=host, port=port[:20]):
+                    with self.assertRaisesRegex(
+                        ValueError, "^URL port must be between 1 and 65535$"
+                    ):
+                        parse_http_url(f"http://{host}:{port}/")
+
+    def test_nonnumeric_ports_keep_distinct_diagnostics(self) -> None:
+        for port in ("invalid", "-1", "+1", "\uff11\uff12"):
+            with self.subTest(port=port):
+                with self.assertRaisesRegex(ValueError, "Port could not be cast"):
+                    parse_http_url(f"http://station.local:{port}/")
+
+    def test_missing_and_unsupported_schemes_have_a_specific_error_type(self) -> None:
+        for url in ("station.local/live", "ftp://station.local/", "//station.local/"):
+            with self.subTest(url=url):
+                with self.assertRaises(UnsupportedHttpSchemeError):
+                    parse_http_url(url)
+        with self.assertRaises(ValueError) as raised:
+            parse_http_url("http://station local/")
+        self.assertNotIsInstance(raised.exception, UnsupportedHttpSchemeError)
+
+    def test_requests_parse_and_normalize_the_hostname_once(self) -> None:
+        url = "HtTp://BÜCHER.local:8080/live?raw=1#top"
+        with (
+            patch("socket.getaddrinfo") as dns,
+            patch("ambientweather2sqlite.mureq.get", return_value="page") as get,
+            patch(
+                "ambientweather2sqlite.http_validation.urlsplit",
+                wraps=http_validation.urlsplit,
+            ) as parse,
+            patch(
+                "ambientweather2sqlite.http_validation._normalized_host",
+                wraps=http_validation._normalized_host,  # noqa: SLF001
+            ) as normalize,
+        ):
+            self.assertEqual(station_get(url, auto_retry=True, timeout=1.5), "page")
+        parse.assert_called_once_with(url)
+        normalize.assert_called_once_with("bücher.local", bracketed=False)
+        get.assert_called_once_with(url, auto_retry=True, timeout=1.5)
+        dns.assert_not_called()
+
+    def test_normalized_hosts_preserve_ipv6_scopes_and_idna_equivalence(self) -> None:
+        for url, expected in (
+            ("HTTP://BÜCHER.local/", "xn--bcher-kva.local"),
+            ("https://XN--BCHER-KVA.local:8080/", "xn--bcher-kva.local"),
+            ("http://127.0.0.1/", "127.0.0.1"),
+            ("http://[2001:0db8::1]/", "2001:db8::1"),
+            ("http://[fe80:0000::1%ETH0]/", "fe80::1%ETH0"),
+        ):
+            with self.subTest(url=url), patch("socket.getaddrinfo") as dns:
+                self.assertEqual(normalized_http_host(url), expected)
+                dns.assert_not_called()
+
     @given(port=st.integers())
     def test_port_validation_agrees_with_tcp_range(self, port: int) -> None:
         valid = 1 <= port <= _MAX_TCP_PORT
@@ -26,9 +89,10 @@ class TestHttpValidation(TestCase):
 
     def test_omitted_ports_preserve_existing_defaults(self) -> None:
         self.assertIsNone(validate_port(None, "port"))
-        for scheme in ("http", "https"):
+        for scheme in ("http", "https", "HTTP", "hTtPs"):
             with self.subTest(scheme=scheme):
                 self.assertIsNone(parse_http_url(f"{scheme}://station.local/").port)
+                self.assertIsNone(parse_http_url(f"{scheme}://station.local:/").port)
 
     def test_parsing_preserves_parts_without_receiver_or_network_calls(self) -> None:
         url = "https://USER:password@BÜCHER.local:65535/live%20data?raw=%09#top"
