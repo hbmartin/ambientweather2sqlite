@@ -1,4 +1,4 @@
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from http.client import HTTPException
 from threading import Event, Thread
 from unittest import TestCase
@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from ambientweather2sqlite.alerts import AlertNotifier
 from ambientweather2sqlite.http_validation import parse_http_url
 from ambientweather2sqlite.models import AlertConfig
+from tests.thread_helpers import start_worker
 
 _CONFIG = AlertConfig(
     webhook_url="http://hooks.local/alert",
@@ -23,21 +24,12 @@ def _make_notifier() -> tuple[AlertNotifier, Mock]:
 def _start_collection_event(
     notifier: AlertNotifier, event: str, *, started: Event | None = None
 ) -> tuple[Thread, Future[None]]:
-    result: Future[None] = Future()
-
     def send() -> None:
         if started is not None:
             started.set()
-        try:
-            notifier.collection_event(event, None, 300)
-        except (BaseException,) as error:  # noqa: BLE001, B013
-            result.set_exception(error)
-        else:
-            result.set_result(None)
+        notifier.collection_event(event, None, 300)
 
-    thread = Thread(target=send, daemon=True)
-    thread.start()
-    return thread, result
+    return start_worker(send)
 
 
 class TestAlertNotifier(TestCase):
@@ -238,6 +230,7 @@ class TestAlertNotifier(TestCase):
             consecutive_failures=7,
             alert_sent=True,
         )
+        workers: list[tuple[Thread, Future[None]]] = []
 
         def validate(url: str) -> None:
             entered.set()
@@ -254,19 +247,21 @@ class TestAlertNotifier(TestCase):
                 "ambientweather2sqlite.alerts.parse_http_url", side_effect=validate
             ) as parse,
             patch("ambientweather2sqlite.mureq.post") as post,
-            ThreadPoolExecutor(max_workers=2) as executor,
         ):
-            first = executor.submit(
-                notifier.collection_event, "collection_stalled", None, 300
-            )
             try:
+                workers.append(_start_collection_event(notifier, "collection_stalled"))
                 self.assertTrue(entered.wait(timeout=2))
-                second = executor.submit(second_event)
+                workers.append(start_worker(second_event))
                 self.assertTrue(second_started.wait(timeout=2))
+                release.set()
+                for _, result in workers:
+                    result.result(timeout=2)
             finally:
                 release.set()
-            first.result(timeout=2)
-            second.result(timeout=2)
+                for thread, _ in workers:
+                    thread.join(timeout=2)
+        for thread, _ in workers:
+            self.assertFalse(thread.is_alive())
         parse.assert_called_once_with("http://")
         logger.warning.assert_called_once()
         post.assert_not_called()
@@ -374,6 +369,7 @@ class TestAlertNotifier(TestCase):
         entered = Event()
         release = Event()
         notifier, _ = _make_notifier()
+        workers: list[tuple[Thread, Future[None]]] = []
 
         def post(_url: str, *, json: dict[str, object], timeout: float) -> None:
             self.assertEqual(timeout, _CONFIG.timeout_seconds)
@@ -387,20 +383,24 @@ class TestAlertNotifier(TestCase):
             patch(
                 "ambientweather2sqlite.alerts.parse_http_url", wraps=parse_http_url
             ) as validate,
-            ThreadPoolExecutor(max_workers=2) as executor,
         ):
-            first = executor.submit(
-                notifier.collection_event, "collection_stalled", None, 300
-            )
             try:
+                workers.append(_start_collection_event(notifier, "collection_stalled"))
                 self.assertTrue(entered.wait(timeout=2))
-                second = executor.submit(
-                    notifier.collection_event, "collection_resumed", None, 0
+                workers.append(
+                    start_worker(
+                        lambda: notifier.collection_event("collection_resumed", None, 0)
+                    )
                 )
-                second.result(timeout=2)
+                workers[1][1].result(timeout=2)
+                release.set()
+                workers[0][1].result(timeout=2)
             finally:
                 release.set()
-            first.result(timeout=2)
+                for thread, _ in workers:
+                    thread.join(timeout=2)
+        for thread, _ in workers:
+            self.assertFalse(thread.is_alive())
         validate.assert_called_once_with(_CONFIG.webhook_url)
 
     def test_transport_value_errors_preserve_outage_counts_and_request_arguments(

@@ -21,18 +21,17 @@ def validate_port(value: int | None, key: str) -> int | None:
     return value
 
 
-def _raw_url_port(parsed: SplitResult) -> str:
-    authority = parsed.netloc.rsplit("@", 1)[-1]
+def _raw_url_port(authority: str) -> str:
     if authority.startswith("["):
         authority = authority.partition("]")[2]
     return authority.partition(":")[2]
 
 
-def _validate_url_port(parsed: SplitResult) -> None:
+def _validate_url_port(parsed: SplitResult, authority: str) -> None:
     try:
         port = parsed.port
     except (ValueError,):  # noqa: B013
-        raw_port = _raw_url_port(parsed)
+        raw_port = _raw_url_port(authority)
         if raw_port.isascii() and raw_port.isdecimal():
             significant = raw_port.lstrip("0") or "0"
             numeric_port = (
@@ -71,10 +70,9 @@ def _parse_http_url(url: str) -> tuple[SplitResult, str]:
     if host is None:
         msg = "URL is missing a hostname"
         raise ValueError(msg)
-    _validate_url_port(parsed)
-    normalized_host = _normalized_host(
-        host, bracketed=parsed.netloc.rsplit("@", 1)[-1].startswith("[")
-    )
+    authority = parsed.netloc.rsplit("@", 1)[-1]
+    _validate_url_port(parsed, authority)
+    normalized_host = _normalized_host(host, bracketed=authority.startswith("["))
     return parsed, normalized_host
 
 
