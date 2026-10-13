@@ -4,7 +4,6 @@ import signal
 import sqlite3
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from http.client import HTTPException
 from logging.handlers import RotatingFileHandler
@@ -28,6 +27,7 @@ from ambientweather2sqlite.daemon import (
 from ambientweather2sqlite.database import create_database_if_not_exists
 from ambientweather2sqlite.exceptions import InvalidTimestampError
 from ambientweather2sqlite.models import AlertConfig, MqttConfig, RediscoveryConfig
+from tests.thread_helpers import run_worker
 
 
 def _patch_rediscovery_network(test: TestCase) -> None:
@@ -210,14 +210,16 @@ class TestDaemonHelpers(TestCase):
 
     def test_sigterm_handler_is_noop_off_main_thread(self) -> None:
         original = signal.getsignal(signal.SIGTERM)
+        logger = Mock()
 
         def run() -> None:
-            with _sigterm_handler():
+            with _sigterm_handler(logger):
                 self.assertEqual(signal.getsignal(signal.SIGTERM), original)
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            executor.submit(run).result(timeout=2)
+        run_worker(run)
         self.assertEqual(signal.getsignal(signal.SIGTERM), original)
+        logger.warning.assert_called_once()
+        self.assertIn("outside the main thread", logger.warning.call_args.args[0])
 
     @patch("ambientweather2sqlite.daemon._publish_discovery")
     @patch("ambientweather2sqlite.daemon.create_metadata")

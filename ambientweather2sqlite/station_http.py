@@ -3,23 +3,19 @@
 import ipaddress
 from http.client import HTTPException
 from threading import Lock
-from urllib.parse import urlsplit
+from typing import cast
 from weakref import WeakValueDictionary
 
 from . import mureq
+from .http_validation import parse_http_url
 
 _REGISTRY_LOCK = Lock()
 _RECEIVER_LOCKS: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 
 
 def _receiver_address(url: str) -> str:
-    parsed = urlsplit(url)
-    host = parsed.hostname
-    # Accessing port validates malformed and out-of-range port strings.
-    _ = parsed.port
-    if host is None:
-        msg = "Receiver URL is missing a hostname"
-        raise ValueError(msg)
+    parsed = parse_http_url(url)
+    host = cast("str", parsed.hostname)
     try:
         return str(ipaddress.ip_address(host))
     except (ValueError,):  # noqa: B013

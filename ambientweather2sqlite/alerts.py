@@ -8,6 +8,7 @@ from http.client import HTTPException
 from typing import TYPE_CHECKING
 
 from . import mureq
+from .http_validation import parse_http_url
 
 if TYPE_CHECKING:
     import logging
@@ -92,10 +93,11 @@ class AlertNotifier:
 
     def _send(self, payload: dict[str, object]) -> None:
         try:
+            parse_http_url(self.config.webhook_url)
             mureq.post(
                 self.config.webhook_url,
                 json=payload,
                 timeout=self.config.timeout_seconds,
             )
-        except (HTTPException, OSError, TimeoutError) as e:
+        except (HTTPException, OSError, TimeoutError, ValueError) as e:
             self.logger.warning("Alert webhook failed: %s", e)

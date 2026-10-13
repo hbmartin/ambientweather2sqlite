@@ -23,11 +23,17 @@ Concurrent live requests wait for the host lock and each fetch a page. There is
 no admission limit, shared-fetch response, or separate queue timeout. Existing
 transport timeouts and retry behavior apply after acquiring the lock; DNS
 resolution remains the transport's responsibility. Configuration loading rejects
-structurally malformed `live_data_url` values before startup without DNS or
-network requests. At runtime, URL validation failures are reported as
+structurally malformed `live_data_url` and `alerts.webhook_url` values before
+startup without DNS or network requests. HTTP/HTTPS, a valid hostname, and ports
+in `1–65535` are required when supplied; raw whitespace and ASCII control
+characters are rejected before parsing. Valid URL strings and percent-encoded
+path/query characters are preserved. At runtime, unsupported schemes and other
+URL validation failures are reported as
 `Invalid receiver URL`; UTF-8 response-decoding failures use
 `Receiver request failed`. Existing timeout and network diagnostics still apply,
 and runtime failures remain recoverable.
+Expected webhook validation and delivery failures are logged without stopping
+collection, including when an application constructs `AlertConfig` directly.
 
 `rainofhourly` is the ObserverIP **Hourly Rain Rate**, measured in inches/hour
 or millimeters/hour according to the station's rainfall setting. Its metadata
@@ -207,6 +213,11 @@ This 180-second readiness threshold is independent of the embedded collection
 monitor's configurable outage threshold (300 seconds by default). That monitor
 reports an existing stale database immediately at startup, grants startup grace
 to an empty database, and requires advancing committed observations for recovery.
+Monitor comparison and supplied start times use UTC for age calculations; naive
+times mean UTC and aware instants are preserved. Each production check fetches
+the first row before sampling its single comparison clock. The collector warns
+if an opaque native SIGTERM handler or worker-thread startup prevents installation
+of its shutdown translator, leaving the existing handler untouched.
 See the [collection monitor](https://github.com/hbmartin/ambientweather2sqlite#embedded-collection-recovery-monitor)
 for rejected-timestamp handling, notification behavior, and bounded shutdown.
 

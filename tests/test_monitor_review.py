@@ -62,23 +62,95 @@ class TestMonitorReview(TestCase):
                     )
                     monitor.check(supplied)
                     clock.now.assert_not_called()
-                self.assertEqual(checked_at, _NOW)
-                self.assertIs(checked_at.tzinfo, UTC)
-                self.assertFalse(rejected)
-                self.assertFalse(monitor.stalled)
-                logger.error.assert_not_called()
-                if populated:
-                    self.assertEqual(raw, "2026-10-12 15:59:30")
-                    self.assertEqual(latest, _NOW - timedelta(seconds=30))
-                else:
-                    self.assertIsNone(raw)
-                    self.assertIsNone(latest)
+                    self.assertEqual(checked_at, _NOW)
+                    self.assertIs(checked_at.tzinfo, UTC)
+                    self.assertFalse(rejected)
+                    self.assertFalse(monitor.stalled)
+                    logger.error.assert_not_called()
+                    if populated:
+                        self.assertEqual(raw, "2026-10-12 15:59:30")
+                        self.assertEqual(latest, _NOW - timedelta(seconds=30))
+                    else:
+                        self.assertIsNone(raw)
+                        self.assertIsNone(latest)
+
+    def test_start_time_representations_have_identical_empty_database_ages(
+        self,
+    ) -> None:
+        starts = (
+            _NOW.replace(tzinfo=None),
+            _NOW,
+            _NOW.astimezone(timezone(timedelta(hours=-7))),
+        )
+        for start in starts:
+            for supplied in starts:
+                with self.subTest(start=start, supplied=supplied):
+                    logger = Mock()
+                    events = Mock()
+                    monitor = CollectionMonitor(
+                        self.database,
+                        RecoveryConfig(),
+                        logger,
+                        events,
+                        started_at=start,
+                    )
+                    with patch(
+                        "ambientweather2sqlite.database.metrics.datetime",
+                        wraps=datetime,
+                    ) as clock:
+                        monitor.check(supplied + timedelta(seconds=299))
+                        self.assertFalse(monitor.stalled)
+                        logger.error.assert_not_called()
+                        monitor.check(supplied + timedelta(seconds=300))
+                        clock.now.assert_not_called()
+                    self.assertTrue(monitor.stalled)
+                    events.assert_called_once_with("collection_stalled", None, 300.0)
+                    self.assertEqual(monitor.started_at, start)
+                    self.assertEqual(monitor.started_at.tzinfo, start.tzinfo)
+
+    def test_naive_start_handles_future_only_then_valid_observation_recovery(
+        self,
+    ) -> None:
+        future = _NOW + timedelta(days=1)
+        insert_observation(self.database, {"ts": future.isoformat()})
+        events = Mock()
+        monitor = CollectionMonitor(
+            self.database,
+            RecoveryConfig(),
+            Mock(),
+            events,
+            started_at=(_NOW - timedelta(seconds=300)).replace(tzinfo=None),
+        )
+        monitor.check(_NOW.replace(tzinfo=None))
+        self.assertTrue(monitor.stalled)
+        self.assertTrue(monitor._timestamp_error)
+        self.assertIsNone(monitor._last_verified_timestamp)
+        for step in range(1, 4):
+            observed_at = _NOW + timedelta(seconds=step)
+            insert_observation(self.database, {"ts": observed_at.isoformat()})
+            monitor.check(observed_at)
+        self.assertFalse(monitor.stalled)
+        self.assertEqual(monitor._last_verified_timestamp, _NOW + timedelta(seconds=3))
+        self.assertEqual(
+            [call.args[0] for call in events.call_args_list],
+            ["collection_stalled", "collection_resumed"],
+        )
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 4
+            )
+            self.assertEqual(
+                connection.execute("SELECT MAX(ts) FROM observations").fetchone()[0],
+                "2026-10-13 16:00:00",
+            )
 
     @given(
-        offset_minutes=st.integers(min_value=-1439, max_value=1439), naive=st.booleans()
+        offset_minutes=st.integers(min_value=-1439, max_value=1439),
+        naive=st.booleans(),
+        naive_start=st.booleans(),
     )
     def test_clock_representation_does_not_change_selected_timestamp(
-        self, *, offset_minutes: int, naive: bool
+        self, *, offset_minutes: int, naive: bool, naive_start: bool
     ) -> None:
         insert_observation(
             self.database, {"ts": (_NOW - timedelta(microseconds=1)).isoformat()}
@@ -97,6 +169,19 @@ class TestMonitorReview(TestCase):
                 _NOW,
             ),
         )
+        start = (
+            _NOW.replace(tzinfo=None)
+            if naive_start
+            else _NOW.astimezone(timezone(timedelta(minutes=-offset_minutes)))
+        )
+        logger = Mock()
+        monitor = CollectionMonitor(
+            self.database, RecoveryConfig(), logger, started_at=start
+        )
+        monitor.check(supplied)
+        self.assertFalse(monitor.stalled)
+        logger.error.assert_not_called()
+        self.assertEqual(monitor.started_at, start)
 
     def test_first_row_is_fetched_before_clock_and_older_rows_stay_unread(self) -> None:
         phases: list[str] = []

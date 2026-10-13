@@ -131,12 +131,17 @@ def next_deadline(epoch: float, period_seconds: int, now: float) -> float:
 @contextmanager
 def _sigterm_handler(logger: logging.Logger | None = None) -> Generator[None]:
     """Translate SIGTERM into an interrupt while preserving a restorable handler."""
+    active_logger = logger if logger is not None else logging.getLogger(__name__)
     if threading.current_thread() is not threading.main_thread():
+        active_logger.warning(
+            "SIGTERM translator not installed: daemon started outside the main "
+            "thread; graceful SIGTERM shutdown depends on the main-thread handler",
+        )
         yield
         return
     previous = signal.getsignal(signal.SIGTERM)
     if previous is None:
-        (logger or logging.getLogger(__name__)).warning(
+        active_logger.warning(
             "SIGTERM translator not installed: preserving an opaque native handler; "
             "graceful SIGTERM shutdown depends on that handler",
         )
