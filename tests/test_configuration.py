@@ -608,6 +608,55 @@ class TestConfiguration(TestCase):
             f'database_path = "{expected_db_path}"\n',
         )
 
+    def test_setup_preserves_mixed_case_url_and_reprompts_with_diagnostics(
+        self,
+    ) -> None:
+        invalid_urls = (
+            ("httpfoo", "live_data_url must start with http:// or https://"),
+            ("http://", "live_data_url is invalid: URL is missing a hostname"),
+            ("http://station.local:0/", "URL port must be between 1 and 65535"),
+            ("http://station.local:abc:70000/", "Port could not be cast"),
+            ("http://station local/", "whitespace or ASCII control characters"),
+        )
+        for url in (
+            "HTTP://Observer.LOCAL:8080/live?raw=1#top",
+            "hTtPs://[fe80::1%ETH0]:65535/live",
+        ):
+            with self.subTest(url=url), tempfile.TemporaryDirectory() as directory:
+                output_path = Path(directory) / "aw2sqlite.toml"
+                with (
+                    patch("builtins.print") as output,
+                    patch(
+                        "builtins.input",
+                        side_effect=[
+                            "n",
+                            *(invalid for invalid, _ in invalid_urls),
+                            f"  {url}  ",
+                            "/tmp/weather.db",
+                            "",
+                        ],
+                    ) as prompt,
+                    patch("socket.getaddrinfo") as dns,
+                    patch("ambientweather2sqlite.station_http._receiver_lock") as lock,
+                    patch("ambientweather2sqlite.mureq.get") as get,
+                    patch("ambientweather2sqlite.mureq.post") as post,
+                ):
+                    created = configuration.create_config_file(output_path)
+                    config = load_config(created)
+                self.assertEqual(prompt.call_count, len(invalid_urls) + 4)
+                self.assertEqual(config.live_data_url, url)
+                self.assertIn(
+                    f'live_data_url = "{url}"', created.read_text(encoding="utf-8")
+                )
+                diagnostics = [str(call.args[0]) for call in output.call_args_list]
+                self.assertEqual(len(diagnostics), len(invalid_urls) + 2)
+                for actual, (_, expected) in zip(
+                    diagnostics[2:], invalid_urls, strict=True
+                ):
+                    self.assertIn(expected, actual)
+                for operation in (dns, lock, get, post):
+                    operation.assert_not_called()
+
     def test_create_config_file_writes_to_explicit_path_with_port(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "custom.toml"

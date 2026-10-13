@@ -21,11 +21,18 @@ def validate_port(value: int | None, key: str) -> int | None:
     return value
 
 
+def _raw_url_port(parsed: SplitResult) -> str:
+    authority = parsed.netloc.rsplit("@", 1)[-1]
+    if authority.startswith("["):
+        authority = authority.partition("]")[2]
+    return authority.partition(":")[2]
+
+
 def _validate_url_port(parsed: SplitResult) -> None:
     try:
         port = parsed.port
     except (ValueError,):  # noqa: B013
-        raw_port = parsed.netloc.rsplit("@", 1)[-1].rpartition(":")[2]
+        raw_port = _raw_url_port(parsed)
         if raw_port.isascii() and raw_port.isdecimal():
             significant = raw_port.lstrip("0") or "0"
             numeric_port = (

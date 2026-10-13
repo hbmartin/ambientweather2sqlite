@@ -97,7 +97,8 @@ class AlertNotifier:
             }
         )
 
-    def _webhook_is_valid(self, url: str) -> bool:
+    def _validate_current_webhook_url(self, url: str) -> bool:
+        validation_error: ValueError | None = None
         with self._webhook_validation_lock:
             if url != self._validated_webhook_url:
                 self._validated_webhook_url = url
@@ -105,14 +106,17 @@ class AlertNotifier:
                 try:
                     parse_http_url(url)
                 except (ValueError,) as error:  # noqa: B013
-                    self.logger.warning("Alert webhook failed: %s", error)
+                    validation_error = error
                 else:
                     self._webhook_url_valid = True
-            return self._webhook_url_valid
+            valid = self._webhook_url_valid
+        if validation_error is not None:
+            self.logger.warning("Alert webhook failed: %s", validation_error)
+        return valid
 
     def _send(self, payload: dict[str, object]) -> None:
         config = self.config
-        if not self._webhook_is_valid(config.webhook_url):
+        if not self._validate_current_webhook_url(config.webhook_url):
             return
         try:
             mureq.post(

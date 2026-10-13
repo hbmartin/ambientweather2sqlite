@@ -1,7 +1,10 @@
 """Pure URL parsing and port-boundary invariants."""
 
+import sys
+from http.client import HTTPException
 from unittest import TestCase
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -19,6 +22,51 @@ _MAX_TCP_PORT = 65535
 
 
 class TestHttpValidation(TestCase):
+    def test_multicolon_ports_keep_complete_nonnumeric_diagnostics(self) -> None:
+        for host in (
+            "station.local",
+            "user:password@station.local",
+            "[::1]",
+            "[fe80::1%ETH0]",
+        ):
+            for port in ("abc:70000", "80:70000", ":70000"):
+                url = f"http://{host}:{port}/"
+                diagnostic = f"Port could not be cast to integer value as {port!r}"
+                with self.subTest(host=host, port=port):
+                    with self.assertRaises(ValueError) as raised:
+                        parse_http_url(url)
+                    self.assertEqual(str(raised.exception), diagnostic)
+                    with (
+                        patch("ambientweather2sqlite.mureq.get") as get,
+                        patch("socket.getaddrinfo") as dns,
+                        self.assertRaises(HTTPException) as request_error,
+                    ):
+                        station_get(url, auto_retry=True, timeout=1.5)
+                    self.assertEqual(
+                        str(request_error.exception),
+                        f"Invalid receiver URL: {diagnostic}",
+                    )
+                    self.assertIsInstance(request_error.exception.__cause__, ValueError)
+                    self.assertEqual(str(request_error.exception.__cause__), diagnostic)
+                    get.assert_not_called()
+                    dns.assert_not_called()
+
+    def test_excessive_valid_port_padding_retains_standard_parser_behavior(
+        self,
+    ) -> None:
+        digits = sys.get_int_max_str_digits() or sys.int_info.default_max_str_digits
+        url = "http://station.local:" + "0" * (digits + 1) + "80/"
+        if sys.get_int_max_str_digits():
+            with self.assertRaises(ValueError) as standard_error:
+                _ = urlsplit(url).port
+            with self.assertRaises(ValueError) as validation_error:
+                parse_http_url(url)
+            self.assertEqual(
+                str(validation_error.exception), str(standard_error.exception)
+            )
+        else:
+            self.assertEqual(parse_http_url(url).port, 80)
+
     def test_numeric_port_range_errors_use_the_supported_range(self) -> None:
         for host in ("station.local", "[::1]", "user:password@station.local"):
             for port in ("0", "65536", "00065536", "9" * 5000):

@@ -23,6 +23,10 @@ _INVALID_URLS = (
     "http://[::1/livedata.htm",
     "http://[not-an-ip]/",
     "http://station.local:invalid/",
+    "http://station.local:abc:70000/",
+    "http://user:password@station.local:abc:70000/",
+    "http://[::1]:abc:70000/",
+    "http://[fe80::1%ETH0]:abc:70000/",
     "http://station.local:-1/",
     "http://station.local:0/",
     "http://station.local:65536/",
@@ -75,6 +79,15 @@ class TestReceiverConfiguration(TestCase):
                 "is invalid: URL port must be between 1 and 65535",
             ),
             ("http://station.local:invalid/", "is invalid: Port could not be cast"),
+            *(
+                (f"http://{host}:abc:70000/", "is invalid: Port could not be cast")
+                for host in (
+                    "station.local",
+                    "user:password@station.local",
+                    "[::1]",
+                    "[fe80::1%ETH0]",
+                )
+            ),
         )
         for field in ("live_data_url", "alerts.webhook_url"):
             for url, diagnostic in cases:

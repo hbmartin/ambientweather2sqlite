@@ -277,12 +277,14 @@ def _prompt_for_discovered_station(stations: list[str]) -> str:
 
 
 def _prompt_manual_url() -> str:
-    ambient_url = ""
-    while not ambient_url.startswith("http"):
+    while True:
         ambient_url = input(
             "Enter AmbientWeather Live Data URL: (e.g. http://192.168.0.226/livedata.htm)\n",
         ).strip()
-    return ambient_url
+        try:
+            return _validate_url(ambient_url, "live_data_url")
+        except (ValueError,) as error:  # noqa: B013
+            print(error)
 
 
 def _prompt_for_url() -> str:

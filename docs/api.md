@@ -29,8 +29,11 @@ A valid hostname is required, and any supplied port must be in `1–65535`.
 Raw whitespace and ASCII control characters are rejected before parsing.
 Valid URL strings and percent-encoded path/query characters are preserved.
 Numeric port-range failures consistently
-report `URL port must be between 1 and 65535`; nonnumeric ports have separate
-diagnostics. At runtime, unsupported schemes and other URL validation failures
+report `URL port must be between 1 and 65535`; nonnumeric ports, including
+malformed values such as `abc:70000`, report `Port could not be cast to integer value`.
+Manual URL entry during setup uses the same validator, accepts mixed-case
+HTTP/HTTPS, and displays a validation error before prompting again.
+At runtime, unsupported schemes and other URL validation failures
 are reported as
 `Invalid receiver URL`; UTF-8 response-decoding failures use
 `Receiver request failed`. Existing timeout and network diagnostics still apply,

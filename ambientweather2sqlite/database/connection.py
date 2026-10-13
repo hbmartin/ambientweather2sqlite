@@ -6,6 +6,8 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ambientweather2sqlite.time_utils import normalize_utc
+
 _DEFAULT_TABLE_NAME = "observations"
 _TS_COL = "ts"
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
@@ -87,7 +89,4 @@ def _parse_stored_timestamp(value: str) -> datetime:
     Naive timestamps are assumed to have been stored in UTC. Aware timestamps are
     converted to UTC before being returned.
     """
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    return normalize_utc(datetime.fromisoformat(value))

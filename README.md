@@ -304,6 +304,11 @@ On the first run, if no config file is found, you will be guided through an inte
 3. **Server Port** - for the JSON API server (leave blank to disable)
 4. **Output TOML Filename** - defaults to `./aw2sqlite.toml`
 
+Manual URL entry uses the same validation as configuration loading. HTTP/HTTPS
+schemes are case-insensitive, and invalid entries display the reason before
+prompting again. Accepted URL spelling is preserved after trimming surrounding
+whitespace.
+
 ### Config File
 
 The generated config file is a TOML file:
@@ -411,7 +416,7 @@ Home Assistant statistics.
 The daemon continuously fetches live data from your weather station's HTTP endpoint, parses sensor readings from the HTML page, and inserts them into the SQLite database every 60 seconds.
 
 - On an interactive terminal, current readings are displayed as labeled JSON with a live countdown to the next fetch. When stdout is captured (Docker, systemd, launchd, or a redirect), the daemon prints one concise line per cycle instead - the countdown and full-JSON redraw rely on terminal cursor control that would otherwise accumulate as unbounded noise in a log file
-- Configuration loading rejects malformed `live_data_url` and `alerts.webhook_url` values before collection starts. Both require HTTP/HTTPS (scheme capitalization is accepted), a hostname with valid IDNA or IPv6 syntax, and any supplied port must be between 1 and 65535. Numeric port-range errors consistently report `URL port must be between 1 and 65535`. Raw whitespace and ASCII control characters are rejected before parsing can remove them; percent-encoded path/query characters remain supported. Validation performs no DNS lookup or network request and preserves valid URL strings
+- Configuration loading rejects malformed `live_data_url` and `alerts.webhook_url` values before collection starts. Both require HTTP/HTTPS (scheme capitalization is accepted), a hostname with valid IDNA or IPv6 syntax, and any supplied port must be between 1 and 65535. Numeric port-range errors consistently report `URL port must be between 1 and 65535`; nonnumeric ports, including malformed values such as `abc:70000`, report `Port could not be cast to integer value`. Raw whitespace and ASCII control characters are rejected before parsing can remove them; percent-encoded path/query characters remain supported. Validation performs no DNS lookup or network request and preserves valid URL strings
 - Runtime errors (timeouts, HTTP failures) are logged to `<database_stem>_daemon.log` and the daemon continues running. Invalid receiver URLs and receiver request failures have separate diagnostics; a response that cannot be decoded as UTF-8 is a request failure. That log (and the API server's `<database_stem>_server.log`) uses a size-capped rotating handler (5 MB × 4 files) so it cannot grow without bound
 - Implausible sensor values (e.g. temperature outside -150..200 range) emit a warning log
 - If a fetch parses zero sensors (e.g. the station page format changed), a warning is logged and nothing is inserted for that interval

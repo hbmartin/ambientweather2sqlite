@@ -8,6 +8,7 @@ import tempfile
 from contextlib import closing
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal, assert_never
 from unittest import TestCase
 from unittest.mock import MagicMock, Mock, patch
 
@@ -23,14 +24,21 @@ from ambientweather2sqlite.models import RecoveryConfig
 from ambientweather2sqlite.recovery import CollectionMonitor
 
 _NOW = datetime(2026, 10, 12, 16, tzinfo=UTC)
+type ClockRepresentation = Literal["naive", "utc", "offset"]
 
 
-def _clock_representation(value: datetime, style: str, offset_minutes: int) -> datetime:
-    if style == "naive":
-        return value.replace(tzinfo=None)
-    if style == "utc":
-        return value
-    return value.astimezone(timezone(timedelta(minutes=offset_minutes)))
+def _clock_representation(
+    value: datetime, style: ClockRepresentation, offset_minutes: int
+) -> datetime:
+    match style:
+        case "naive":
+            return value.replace(tzinfo=None)
+        case "utc":
+            return value
+        case "offset":
+            return value.astimezone(timezone(timedelta(minutes=offset_minutes)))
+        case _:
+            assert_never(style)
 
 
 class TestMonitorReview(TestCase):
@@ -197,8 +205,8 @@ class TestMonitorReview(TestCase):
     def test_fallback_age_is_independent_of_start_and_check_representations(
         self,
         *,
-        start_style: str,
-        check_style: str,
+        start_style: ClockRepresentation,
+        check_style: ClockRepresentation,
         start_offset: int,
         check_offset: int,
         age: int,
