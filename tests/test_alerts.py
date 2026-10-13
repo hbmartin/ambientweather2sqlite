@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from ambientweather2sqlite.alerts import AlertNotifier
 from ambientweather2sqlite.http_validation import parse_http_url
 from ambientweather2sqlite.models import AlertConfig
-from tests.thread_helpers import start_worker
+from tests.thread_helpers import join_workers, start_worker
 
 _CONFIG = AlertConfig(
     webhook_url="http://hooks.local/alert",
@@ -258,10 +258,7 @@ class TestAlertNotifier(TestCase):
                     result.result(timeout=2)
             finally:
                 release.set()
-                for thread, _ in workers:
-                    thread.join(timeout=2)
-        for thread, _ in workers:
-            self.assertFalse(thread.is_alive())
+                join_workers(thread for thread, _ in workers)
         parse.assert_called_once_with("http://")
         logger.warning.assert_called_once()
         post.assert_not_called()
@@ -290,23 +287,19 @@ class TestAlertNotifier(TestCase):
             try:
                 workers.append(_start_collection_event(notifier, "collection_stalled"))
                 self.assertTrue(entered.wait(timeout=2))
-                workers.append(
-                    _start_collection_event(
-                        notifier, "collection_resumed", started=second_started
-                    )
+                waiting_thread, waiting_validation = _start_collection_event(
+                    notifier, "collection_resumed", started=second_started
                 )
+                workers.append((waiting_thread, waiting_validation))
                 self.assertTrue(second_started.wait(timeout=2))
                 with self.assertRaises(TimeoutError):
-                    workers[1][1].result(timeout=0.05)
+                    waiting_validation.result(timeout=0.05)
                 release.set()
                 for _, result in workers:
                     result.result(timeout=2)
             finally:
                 release.set()
-                for thread, _ in workers:
-                    thread.join(timeout=2)
-        for thread, _ in workers:
-            self.assertFalse(thread.is_alive())
+                join_workers(thread for thread, _ in workers)
         parse.assert_called_once_with(_CONFIG.webhook_url)
         self.assertCountEqual(
             [call.kwargs["json"]["event"] for call in post.call_args_list],
@@ -339,25 +332,31 @@ class TestAlertNotifier(TestCase):
             patch("ambientweather2sqlite.mureq.post") as post,
         ):
             try:
-                workers.append(_start_collection_event(notifier, "collection_stalled"))
+                warning_thread, blocked_warning = _start_collection_event(
+                    notifier, "collection_stalled"
+                )
+                workers.append((warning_thread, blocked_warning))
                 self.assertTrue(entered.wait(timeout=2))
-                workers.append(_start_collection_event(notifier, "collection_resumed"))
-                workers[1][1].result(timeout=1)
+                cached_thread, cached_event = _start_collection_event(
+                    notifier, "collection_resumed"
+                )
+                workers.append((cached_thread, cached_event))
+                cached_event.result(timeout=1)
                 parse.assert_called_once_with("http://")
                 logger.warning.assert_called_once()
                 post.assert_not_called()
                 notifier.config = _CONFIG
-                workers.append(_start_collection_event(notifier, "collection_resumed"))
-                workers[2][1].result(timeout=1)
+                replacement_thread, replacement_event = _start_collection_event(
+                    notifier, "collection_resumed"
+                )
+                workers.append((replacement_thread, replacement_event))
+                replacement_event.result(timeout=1)
                 self.assertEqual(parse.call_count, 2)
                 release.set()
-                workers[0][1].result(timeout=2)
+                blocked_warning.result(timeout=2)
             finally:
                 release.set()
-                for thread, _ in workers:
-                    thread.join(timeout=2)
-        for thread, _ in workers:
-            self.assertFalse(thread.is_alive())
+                join_workers(thread for thread, _ in workers)
         logger.warning.assert_called_once()
         post.assert_called_once()
         self.assertEqual(post.call_args.args, (_CONFIG.webhook_url,))
@@ -385,22 +384,21 @@ class TestAlertNotifier(TestCase):
             ) as validate,
         ):
             try:
-                workers.append(_start_collection_event(notifier, "collection_stalled"))
-                self.assertTrue(entered.wait(timeout=2))
-                workers.append(
-                    start_worker(
-                        lambda: notifier.collection_event("collection_resumed", None, 0)
-                    )
+                blocked_thread, blocked_delivery = _start_collection_event(
+                    notifier, "collection_stalled"
                 )
-                workers[1][1].result(timeout=2)
+                workers.append((blocked_thread, blocked_delivery))
+                self.assertTrue(entered.wait(timeout=2))
+                independent_thread, independent_delivery = start_worker(
+                    lambda: notifier.collection_event("collection_resumed", None, 0)
+                )
+                workers.append((independent_thread, independent_delivery))
+                independent_delivery.result(timeout=2)
                 release.set()
-                workers[0][1].result(timeout=2)
+                blocked_delivery.result(timeout=2)
             finally:
                 release.set()
-                for thread, _ in workers:
-                    thread.join(timeout=2)
-        for thread, _ in workers:
-            self.assertFalse(thread.is_alive())
+                join_workers(thread for thread, _ in workers)
         validate.assert_called_once_with(_CONFIG.webhook_url)
 
     def test_transport_value_errors_preserve_outage_counts_and_request_arguments(

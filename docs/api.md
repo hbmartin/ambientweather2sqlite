@@ -33,8 +33,11 @@ report `URL port must be between 1 and 65535`; nonnumeric ports, including
 malformed values such as `abc:70000`, report `Port could not be cast to integer value`.
 Manual URL entry during setup uses the same validator, accepts mixed-case
 HTTP/HTTPS, silently re-prompts on blank input, and explains invalid nonblank
-entries. Generated TOML preserves accepted URLs and database paths through
-string escaping; see [setup guidance](https://github.com/hbmartin/ambientweather2sqlite#configuration).
+entries. Setup rejects surrogate characters in URL/database values before
+writing and accepts server ports as ASCII decimal digits in `1–65535`, or
+blank to disable. Leading zeros are saved as a canonical integer. Generated
+TOML preserves accepted strings through escaping; see
+[setup guidance](https://github.com/hbmartin/ambientweather2sqlite#configuration).
 At runtime, unsupported schemes and other URL validation failures
 are reported as
 `Invalid receiver URL`; UTF-8 response-decoding failures use

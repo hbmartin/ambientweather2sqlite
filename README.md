@@ -310,7 +310,14 @@ nonblank entries display the reason using the name "Live data URL".
 Accepted URL spelling and database paths are preserved after trimming
 surrounding whitespace. The generated TOML escapes quotes, backslashes, and
 control characters, so loading it restores those exact values, including
-Unicode.
+Unicode. URL and database-path values containing surrogate characters, such
+as undecodable terminal bytes, display an error and prompt again before the
+output file is opened.
+
+The setup server port accepts ASCII decimal digits in `1–65535`, or blank to
+disable the server. Invalid input displays a reason and prompts again.
+Leading zeros are accepted and saved as a canonical decimal integer. This
+prompt restriction does not change integer syntax in existing TOML files.
 
 ### Config File
 

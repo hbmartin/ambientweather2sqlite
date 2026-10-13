@@ -1,5 +1,6 @@
 import tempfile
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -19,6 +20,17 @@ class TestTomlStrings(TestCase):
     def test_encoded_strings_round_trip_through_toml(self, value: str) -> None:
         encoded = configuration._toml_string(value)  # noqa: SLF001
         self.assertEqual(tomllib.loads(f"value = {encoded}")["value"], value)
+
+    @given(
+        prefix=st.text(alphabet=st.characters(exclude_categories=("Cs",))),
+        surrogate=st.integers(min_value=0xD800, max_value=0xDFFF),
+        suffix=st.text(alphabet=st.characters(exclude_categories=("Cs",))),
+    )
+    def test_encoder_rejects_surrogates(
+        self, prefix: str, surrogate: int, suffix: str
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "surrogate characters"):
+            configuration._toml_string(prefix + chr(surrogate) + suffix)  # noqa: SLF001
 
 
 class TestRecoveryConfiguration(TestCase):
@@ -772,6 +784,221 @@ class TestConfiguration(TestCase):
             'live_data_url = "http://127.0.0.1/livedata.htm"\n'
             f'database_path = "{current_path / "aw2sqlite.db"}"\n',
         )
+
+
+class TestSetupInputValidation(TestCase):
+    def test_invalid_ports_reprompt_before_saving_a_loadable_config(self) -> None:
+        invalid_ports = (
+            "oops",
+            "8080.0",
+            "+8080",
+            "-1",
+            "0x1f90",
+            "8_080",
+            "true",
+            "８０８０",  # noqa: RUF001
+            "٨٠٨٠",
+            "0",
+            "000",
+            "65536",
+            "9" * 5000,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            responses = iter(
+                [
+                    "n",
+                    "http://station.local/",
+                    "weather.db",
+                    *invalid_ports,
+                    "008080",
+                ]
+            )
+
+            def prompt(_message: str) -> str:
+                self.assertFalse(path.exists())
+                return next(responses)
+
+            with (
+                patch("builtins.input", side_effect=prompt) as inputs,
+                patch("builtins.print") as output,
+            ):
+                created = configuration.create_config_file(path)
+            self.assertEqual(inputs.call_count, len(invalid_ports) + 4)
+            self.assertEqual(load_config(created).port, 8080)
+            self.assertTrue(
+                created.read_text(encoding="utf-8").endswith("port = 8080\n")
+            )
+            diagnostics = [str(call.args[0]) for call in output.call_args_list][2:]
+            self.assertEqual(len(diagnostics), len(invalid_ports))
+            for diagnostic in diagnostics:
+                self.assertTrue(
+                    "decimal digits" in diagnostic
+                    or "between 1 and 65535" in diagnostic
+                )
+
+    def test_valid_ports_are_saved_as_canonical_integers_or_omitted(self) -> None:
+        for entered, expected in (
+            ("", None),
+            ("   ", None),
+            ("1", 1),
+            ("65535", 65535),
+            (" 00080 ", 80),
+            ("0" * 5000 + "443", 443),
+        ):
+            with (
+                self.subTest(port=entered[:20]),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "config.toml"
+                with (
+                    patch(
+                        "builtins.input",
+                        side_effect=[
+                            "n",
+                            "http://station.local/",
+                            "weather.db",
+                            entered,
+                        ],
+                    ),
+                    patch("builtins.print") as output,
+                ):
+                    created = configuration.create_config_file(path)
+                parsed = tomllib.loads(created.read_text(encoding="utf-8"))
+                self.assertEqual(load_config(created).port, expected)
+                if expected is None:
+                    self.assertNotIn("port", parsed)
+                else:
+                    self.assertIs(type(parsed["port"]), int)
+                    self.assertEqual(parsed["port"], expected)
+                self.assertEqual(output.call_count, 2)
+
+    def test_existing_toml_integer_syntax_remains_supported(self) -> None:
+        for spelling in ("0x1f90", "+8080", "8_080"):
+            with (
+                self.subTest(port=spelling),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "config.toml"
+                path.write_text(
+                    'live_data_url = "http://station.local/"\n'
+                    'database_path = "weather.db"\n'
+                    f"port = {spelling}\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(load_config(path).port, 8080)
+
+    def test_surrogate_inputs_reprompt_without_creating_or_truncating_output(
+        self,
+    ) -> None:
+        for surrogate in (
+            b"\xff".decode("utf-8", "surrogateescape"),
+            "\ud800",
+            "\udfff",
+        ):
+            for existing in (False, True):
+                with (
+                    self.subTest(surrogate=ascii(surrogate), existing=existing),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    path = Path(directory) / "config.toml"
+                    original = b"original = true\n"
+                    if existing:
+                        path.write_bytes(original)
+                    responses = iter(
+                        [
+                            "n",
+                            "http://station.local/" + surrogate,
+                            "http://station.local/",
+                            "weather" + surrogate + ".db",
+                            "  気象🌧️.db  ",
+                            "",
+                        ]
+                    )
+
+                    def prompt(
+                        _message: str,
+                        *,
+                        target: Path = path,
+                        expected: bytes | None = original if existing else None,
+                        answers: Iterator[str] = responses,
+                    ) -> str:
+                        if expected is not None:
+                            self.assertEqual(target.read_bytes(), expected)
+                        else:
+                            self.assertFalse(target.exists())
+                        return next(answers)
+
+                    with (
+                        patch("builtins.input", side_effect=prompt) as inputs,
+                        patch("builtins.print") as output,
+                    ):
+                        created = configuration.create_config_file(
+                            path, overwrite_existing=True
+                        )
+                    config = load_config(created)
+                    self.assertEqual(config.live_data_url, "http://station.local/")
+                    self.assertEqual(config.database_path, "気象🌧️.db")
+                    self.assertEqual(inputs.call_count, 6)
+                    diagnostics = [call.args[0] for call in output.call_args_list][2:]
+                    self.assertEqual(len(diagnostics), 2)
+                    self.assertTrue(diagnostics[0].startswith("Invalid live data URL:"))
+                    self.assertTrue(diagnostics[1].startswith("Invalid database path:"))
+                    self.assertTrue(
+                        all("surrogate characters" in item for item in diagnostics)
+                    )
+
+    def test_invalid_database_default_reprompts_for_a_valid_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            responses = iter(["n", "http://station.local/", "", "weather.db", ""])
+
+            def prompt(message: str) -> str:
+                message.encode("utf-8")
+                self.assertFalse(path.exists())
+                return next(responses)
+
+            with (
+                patch.object(
+                    configuration, "_CURRENT_PATH", Path(directory) / "\udcff"
+                ),
+                patch(
+                    "builtins.input",
+                    side_effect=prompt,
+                ) as inputs,
+                patch("builtins.print") as output,
+            ):
+                created = configuration.create_config_file(path)
+            self.assertEqual(load_config(created).database_path, "weather.db")
+            self.assertEqual(inputs.call_count, 5)
+            self.assertIn(
+                "Invalid database path: surrogate characters", output.call_args.args[0]
+            )
+
+    def test_encoder_defense_precedes_output_open_for_direct_invalid_values(
+        self,
+    ) -> None:
+        for field in ("url", "database_path"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "config.toml"
+                path.write_bytes(b"original = true\n")
+                url = "http://station.local/" + ("\udcff" if field == "url" else "")
+                database_path = "weather.db" + (
+                    "\ud800" if field == "database_path" else ""
+                )
+                with (
+                    patch.object(configuration, "_prompt_for_url", return_value=url),
+                    patch.object(
+                        configuration,
+                        "_prompt_database_path",
+                        return_value=database_path,
+                    ),
+                    patch("builtins.input", return_value=""),
+                    patch("builtins.print"),
+                    self.assertRaisesRegex(ValueError, "surrogate characters"),
+                ):
+                    configuration.create_config_file(path, overwrite_existing=True)
+                self.assertEqual(path.read_bytes(), b"original = true\n")
 
 
 class TestPositiveIntegerInvariant(TestCase):

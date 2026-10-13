@@ -163,8 +163,11 @@ unchanged. Numeric port-range failures consistently report
 `abc:70000` report `Port could not be cast to integer value`. Manual URL entry
 during setup uses the same validation, accepts mixed-case HTTP/HTTPS schemes,
 and explains invalid nonblank entries; blank entries silently prompt again.
-Generated TOML preserves accepted URLs and database paths through string
-escaping; see [setup guidance](https://github.com/hbmartin/ambientweather2sqlite#configuration).
+Setup re-prompts for surrogate characters in URL/database values and invalid
+server ports before writing. Ports accept ASCII decimal digits in `1–65535`,
+or blank to disable, and leading zeros are saved as a canonical integer.
+Generated TOML preserves accepted strings through escaping; see
+[setup guidance](https://github.com/hbmartin/ambientweather2sqlite#configuration).
 Runtime invalid-URL diagnostics are
 separate from receiver request failures, including invalid UTF-8 responses; runtime errors
 continue through the normal retry path.

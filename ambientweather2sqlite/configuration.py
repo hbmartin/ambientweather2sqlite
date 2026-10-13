@@ -20,6 +20,10 @@ _CURRENT_PATH = Path.cwd()
 _DEFAULT_CONFIG_NAME = "aw2sqlite.toml"
 _DEFAULT_DATABASE_NAME = "aw2sqlite.db"
 _VALID_LOG_FORMATS = frozenset({"text", "json"})
+_SURROGATE_START = 0xD800
+_SURROGATE_END = 0xDFFF
+_MAX_SERVER_PORT = 65535
+_SERVER_PORT_DIGITS = len(str(_MAX_SERVER_PORT))
 
 
 def _config_type_error(key: str, expected_type: str) -> TypeError:
@@ -285,6 +289,7 @@ def _prompt_manual_url() -> str:
         if not ambient_url:
             continue
         try:
+            _validate_unicode_scalars(ambient_url)
             parse_http_url(ambient_url)
         except (UnsupportedHttpSchemeError,):  # noqa: B013
             print("Live data URL must start with http:// or https://")
@@ -321,8 +326,60 @@ def _prompt_for_url() -> str:
     return _prompt_manual_url()
 
 
+def _validate_unicode_scalars(value: str) -> None:
+    if any(_SURROGATE_START <= ord(character) <= _SURROGATE_END for character in value):
+        msg = "surrogate characters cannot be saved in TOML; enter valid Unicode text"
+        raise ValueError(msg)
+
+
+def _prompt_database_path() -> str:
+    default = str(_CURRENT_PATH / _DEFAULT_DATABASE_NAME)
+    display_default = default.encode("utf-8", errors="backslashreplace").decode("utf-8")
+    while True:
+        database_path = (
+            input(
+                f"Enter Database Path (leave blank for default: {display_default}):\n",
+            ).strip()
+            or default
+        )
+        try:
+            _validate_unicode_scalars(database_path)
+        except (ValueError,) as error:  # noqa: B013
+            print(f"Invalid database path: {error}")
+        else:
+            return database_path
+
+
+def _prompt_server_port() -> int | None:
+    while True:
+        raw_port = input(
+            "Enter port number to server JSON data (leave blank to disable):\n",
+        ).strip()
+        if not raw_port:
+            return None
+        if not (raw_port.isascii() and raw_port.isdecimal()):
+            print(
+                "Invalid server port: enter decimal digits, or leave blank to disable"
+            )
+            continue
+        significant = raw_port.lstrip("0") or "0"
+        port = (
+            int(significant)
+            if len(significant) <= _SERVER_PORT_DIGITS
+            else _MAX_SERVER_PORT + 1
+        )
+        try:
+            validate_port(port, "Server port")
+        except (ValueError,) as error:  # noqa: B013
+            print(error)
+        else:
+            return port
+
+
 def _toml_string(value: str) -> str:
     """Encode a Unicode string as a TOML basic string."""
+    _validate_unicode_scalars(value)
+    # JSON escapes match TOML basic strings for scalars, except raw DEL.
     return json.dumps(value, ensure_ascii=False).replace("\x7f", r"\u007f")
 
 
@@ -344,14 +401,8 @@ def create_config_file(
 
     ambient_url = _prompt_for_url()
 
-    database_path = input(
-        f"Enter Database Path (leave blank for default: {_CURRENT_PATH / _DEFAULT_DATABASE_NAME}):\n",
-    ).strip()
-    if not database_path:
-        database_path = str(_CURRENT_PATH / _DEFAULT_DATABASE_NAME)
-    port = input(
-        "Enter port number to server JSON data (leave blank to disable):\n",
-    ).strip()
+    database_path = _prompt_database_path()
+    port = _prompt_server_port()
 
     if config_path is None:
         output_path_input = input(
@@ -364,7 +415,7 @@ def create_config_file(
         f"live_data_url = {_toml_string(ambient_url)}\n"
         f"database_path = {_toml_string(database_path)}\n"
     )
-    if port:
+    if port is not None:
         config += f"port = {port}\n"
     if not overwrite_existing and output_path.exists():
         return output_path
