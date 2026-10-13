@@ -1,13 +1,94 @@
 """Assertions and timeouts reach the runner without unbounded worker joins."""
 
-from threading import Event, current_thread
+from threading import Event, Thread, current_thread
+from typing import TYPE_CHECKING
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from tests.thread_helpers import run_worker, start_worker
+from tests.thread_helpers import join_workers, run_worker, start_worker
+
+if TYPE_CHECKING:
+    from concurrent.futures import Future
 
 
 class TestBoundedWorkers(TestCase):
+    def test_join_workers_handles_empty_successful_and_failed_workers(self) -> None:
+        join_workers(())
+        failure = AssertionError("original worker failure")
+
+        def fail() -> None:
+            raise failure
+
+        first_thread, success = start_worker(lambda: None)
+        second_thread, failed = start_worker(fail)
+        join_workers(thread for thread in (first_thread, second_thread))
+        self.assertIsNone(success.result(timeout=2))
+        with self.assertRaises(AssertionError) as raised:
+            failed.result(timeout=2)
+        self.assertIs(raised.exception, failure)
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+
+    def test_join_workers_shares_one_budget_and_checks_all_workers(self) -> None:
+        current = 10.0
+        first = Mock(spec=Thread)
+        second = Mock(spec=Thread)
+        first.is_alive.return_value = True
+        second.is_alive.return_value = False
+
+        def consume_budget(*, timeout: float) -> None:
+            nonlocal current
+            current += timeout
+
+        first.join.side_effect = consume_budget
+        with (
+            patch("tests.thread_helpers.monotonic", side_effect=lambda: current),
+            self.assertRaisesRegex(TimeoutError, "did not stop before their deadline"),
+        ):
+            join_workers((first, second), timeout=1)
+        first.join.assert_called_once_with(timeout=1)
+        second.join.assert_called_once_with(timeout=0)
+
+    def test_join_workers_times_out_and_workers_exit_after_release(self) -> None:
+        release = Event()
+        entered = (Event(), Event())
+        workers: list[tuple[Thread, Future[None]]] = []
+
+        def wait(started: Event) -> None:
+            started.set()
+            if not release.wait(timeout=2):
+                raise AssertionError("Worker was not released")
+
+        try:
+            workers.extend(
+                start_worker(lambda event=started: wait(event)) for started in entered
+            )
+            for started in entered:
+                self.assertTrue(started.wait(timeout=2))
+            with self.assertRaises(TimeoutError):
+                join_workers((thread for thread, _ in workers), timeout=0.05)
+            self.assertTrue(all(thread.is_alive() for thread, _ in workers))
+        finally:
+            release.set()
+            join_workers(thread for thread, _ in workers)
+        for _, result in workers:
+            self.assertIsNone(result.result(timeout=2))
+
+    def test_run_worker_preserves_original_exception_if_cleanup_times_out(self) -> None:
+        failure = AssertionError("original worker failure")
+
+        def fail() -> None:
+            raise failure
+
+        with (
+            patch(
+                "tests.thread_helpers.join_workers", side_effect=TimeoutError("cleanup")
+            ),
+            self.assertRaises(AssertionError) as raised,
+        ):
+            run_worker(fail)
+        self.assertIs(raised.exception, failure)
+
     def test_started_worker_captures_original_base_exceptions(self) -> None:
         for error in (
             AssertionError("worker assertion"),
