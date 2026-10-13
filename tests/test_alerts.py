@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from ambientweather2sqlite.alerts import AlertNotifier
 from ambientweather2sqlite.http_validation import parse_http_url
 from ambientweather2sqlite.models import AlertConfig
-from tests.thread_helpers import join_workers, start_worker
+from tests.thread_helpers import cleanup_workers, start_worker
 
 _CONFIG = AlertConfig(
     webhook_url="http://hooks.local/alert",
@@ -247,6 +247,7 @@ class TestAlertNotifier(TestCase):
                 "ambientweather2sqlite.alerts.parse_http_url", side_effect=validate
             ) as parse,
             patch("ambientweather2sqlite.mureq.post") as post,
+            cleanup_workers(thread for thread, _ in workers),
         ):
             try:
                 workers.append(_start_collection_event(notifier, "collection_stalled"))
@@ -258,7 +259,6 @@ class TestAlertNotifier(TestCase):
                     result.result(timeout=2)
             finally:
                 release.set()
-                join_workers(thread for thread, _ in workers)
         parse.assert_called_once_with("http://")
         logger.warning.assert_called_once()
         post.assert_not_called()
@@ -283,6 +283,7 @@ class TestAlertNotifier(TestCase):
                 "ambientweather2sqlite.alerts.parse_http_url", side_effect=validate
             ) as parse,
             patch("ambientweather2sqlite.mureq.post") as post,
+            cleanup_workers(thread for thread, _ in workers),
         ):
             try:
                 workers.append(_start_collection_event(notifier, "collection_stalled"))
@@ -299,7 +300,6 @@ class TestAlertNotifier(TestCase):
                     result.result(timeout=2)
             finally:
                 release.set()
-                join_workers(thread for thread, _ in workers)
         parse.assert_called_once_with(_CONFIG.webhook_url)
         self.assertCountEqual(
             [call.kwargs["json"]["event"] for call in post.call_args_list],
@@ -330,6 +330,7 @@ class TestAlertNotifier(TestCase):
                 "ambientweather2sqlite.alerts.parse_http_url", wraps=parse_http_url
             ) as parse,
             patch("ambientweather2sqlite.mureq.post") as post,
+            cleanup_workers(thread for thread, _ in workers),
         ):
             try:
                 warning_thread, blocked_warning = _start_collection_event(
@@ -356,7 +357,6 @@ class TestAlertNotifier(TestCase):
                 blocked_warning.result(timeout=2)
             finally:
                 release.set()
-                join_workers(thread for thread, _ in workers)
         logger.warning.assert_called_once()
         post.assert_called_once()
         self.assertEqual(post.call_args.args, (_CONFIG.webhook_url,))
@@ -382,6 +382,7 @@ class TestAlertNotifier(TestCase):
             patch(
                 "ambientweather2sqlite.alerts.parse_http_url", wraps=parse_http_url
             ) as validate,
+            cleanup_workers(thread for thread, _ in workers),
         ):
             try:
                 blocked_thread, blocked_delivery = _start_collection_event(
@@ -398,7 +399,6 @@ class TestAlertNotifier(TestCase):
                 blocked_delivery.result(timeout=2)
             finally:
                 release.set()
-                join_workers(thread for thread, _ in workers)
         validate.assert_called_once_with(_CONFIG.webhook_url)
 
     def test_transport_value_errors_preserve_outage_counts_and_request_arguments(

@@ -1,4 +1,5 @@
 import json
+import os
 import tomllib
 from pathlib import Path
 from typing import overload
@@ -135,6 +136,16 @@ def _validate_url(value: str, key: str) -> str:
     return value
 
 
+def _configured_database_path(config_data: dict[str, object]) -> str:
+    value = _require_str(config_data, "database_path")
+    try:
+        _validate_database_path(value)
+    except (ValueError,) as error:  # noqa: B013
+        msg = f"database_path is invalid: {error}"
+        raise ValueError(msg) from error
+    return value
+
+
 def _require_table(value: object, key: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise _config_type_error(key, "a table")
@@ -244,7 +255,7 @@ def load_config(config_path: Path) -> AppConfig:
         live_data_url=_validate_url(
             _require_str(config_data, "live_data_url"), "live_data_url"
         ),
-        database_path=_require_str(config_data, "database_path"),
+        database_path=_configured_database_path(config_data),
         port=validate_port(_optional_int(config_data, "port"), "port"),
         log_format=_optional_log_format(config_data),
         host=_optional_str(config_data, "host", "localhost"),
@@ -277,8 +288,14 @@ def _prompt_for_discovered_station(stations: list[str]) -> str:
 
     while True:
         choice = input("Select a station number: ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(stations):
-            return stations[int(choice) - 1]
+        if not (choice.isascii() and choice.isdecimal()):
+            continue
+        significant = choice.lstrip("0") or "0"
+        if len(significant) > len(str(len(stations))):
+            continue
+        selected = int(significant)
+        if 1 <= selected <= len(stations):
+            return stations[selected - 1]
 
 
 def _prompt_manual_url() -> str:
@@ -332,18 +349,36 @@ def _validate_unicode_scalars(value: str) -> None:
         raise ValueError(msg)
 
 
+def _display_setup_text(value: str) -> str:
+    """Escape surrogate characters for display without changing stored values."""
+    return value.encode("utf-8", errors="backslashreplace").decode("utf-8")
+
+
+def _validate_database_path(value: str) -> None:
+    _validate_unicode_scalars(value)
+    if "\x00" in value:
+        msg = "NUL characters cannot be used in database paths"
+        raise ValueError(msg)
+
+
 def _prompt_database_path() -> str:
     default = str(_CURRENT_PATH / _DEFAULT_DATABASE_NAME)
-    display_default = default.encode("utf-8", errors="backslashreplace").decode("utf-8")
-    while True:
-        database_path = (
-            input(
-                f"Enter Database Path (leave blank for default: {display_default}):\n",
-            ).strip()
-            or default
+    try:
+        _validate_database_path(default)
+    except (ValueError,) as error:  # noqa: B013
+        print(
+            f"Default database path is unavailable: {_display_setup_text(str(error))}"
         )
+        default = ""
+        message = "Enter Database Path (an explicit path is required):\n"
+    else:
+        message = f"Enter Database Path (leave blank for default: {_display_setup_text(default)}):\n"
+    while True:
+        database_path = input(message).strip() or default
+        if not database_path:
+            continue
         try:
-            _validate_unicode_scalars(database_path)
+            _validate_database_path(database_path)
         except (ValueError,) as error:  # noqa: B013
             print(f"Invalid database path: {error}")
         else:
@@ -353,7 +388,7 @@ def _prompt_database_path() -> str:
 def _prompt_server_port() -> int | None:
     while True:
         raw_port = input(
-            "Enter port number to server JSON data (leave blank to disable):\n",
+            "Enter port number to serve JSON data (leave blank to disable):\n",
         ).strip()
         if not raw_port:
             return None
@@ -383,6 +418,61 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False).replace("\x7f", r"\u007f")
 
 
+def _validate_output_path(path: Path) -> None:
+    if "\x00" in str(path):
+        msg = "output filenames must not contain NUL characters"
+        raise ValueError(msg)
+    try:
+        os.fsencode(path)
+    except (UnicodeEncodeError,) as error:  # noqa: B013
+        msg = "output filename cannot be encoded for this filesystem"
+        raise ValueError(msg) from error
+
+
+def _prompt_output_path(default: Path) -> Path:
+    try:
+        _validate_output_path(default)
+    except (ValueError,) as error:  # noqa: B013
+        print(
+            f"Default output filename is unavailable: {_display_setup_text(str(error))}"
+        )
+        message = "Enter output TOML filename (an explicit filename is required):\n"
+        default_available = False
+    else:
+        message = f"Enter output TOML filename (leave blank for default: {_display_setup_text(str(default))}):\n"
+        default_available = True
+    while True:
+        entered = input(message).strip()
+        if not entered and not default_available:
+            continue
+        path = Path(entered) if entered else default
+        try:
+            _validate_output_path(path)
+        except (ValueError,) as error:  # noqa: B013
+            print(f"Invalid output filename: {_display_setup_text(str(error))}")
+        else:
+            return path
+
+
+def _write_config(path: Path, config: str, *, overwrite_existing: bool) -> Path:
+    _validate_output_path(path)
+    if not overwrite_existing and path.exists():
+        return path
+    path.write_text(config, encoding="utf-8")
+    return path
+
+
+def _write_interactive_config(
+    default: Path, config: str, *, overwrite_existing: bool
+) -> Path:
+    while True:
+        path = _prompt_output_path(default)
+        try:
+            return _write_config(path, config, overwrite_existing=overwrite_existing)
+        except (OSError, ValueError) as error:
+            print(f"Could not save configuration: {_display_setup_text(str(error))}")
+
+
 def create_config_file(
     config_path: str | Path | None,
     *,
@@ -393,8 +483,13 @@ def create_config_file(
         if config_path is None
         else Path(config_path)
     )
-    if not overwrite_existing and output_path.exists():
-        return output_path
+    try:
+        _validate_output_path(output_path)
+        if not overwrite_existing and output_path.exists():
+            return output_path
+    except (OSError, ValueError):
+        if config_path is not None:
+            raise
 
     print("Configuration Setup")
     print("-" * 20)
@@ -404,21 +499,14 @@ def create_config_file(
     database_path = _prompt_database_path()
     port = _prompt_server_port()
 
-    if config_path is None:
-        output_path_input = input(
-            f"Enter output TOML filename (leave blank for default: {output_path}):\n",
-        ).strip()
-        if output_path_input:
-            output_path = Path(output_path_input)
-
     config = (
         f"live_data_url = {_toml_string(ambient_url)}\n"
         f"database_path = {_toml_string(database_path)}\n"
     )
     if port is not None:
         config += f"port = {port}\n"
-    if not overwrite_existing and output_path.exists():
-        return output_path
-    output_path.write_text(config, encoding="utf-8")
-
-    return output_path
+    if config_path is None:
+        return _write_interactive_config(
+            output_path, config, overwrite_existing=overwrite_existing
+        )
+    return _write_config(output_path, config, overwrite_existing=overwrite_existing)

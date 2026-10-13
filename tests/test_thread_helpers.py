@@ -5,13 +5,98 @@ from typing import TYPE_CHECKING
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
-from tests.thread_helpers import join_workers, run_worker, start_worker
+from tests.thread_helpers import cleanup_workers, join_workers, run_worker, start_worker
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
 
 
 class TestBoundedWorkers(TestCase):
+    def test_cleanup_preserves_original_base_exception_if_join_times_out(self) -> None:
+        for failure in (
+            AssertionError("original assertion"),
+            SystemExit("original exit"),
+            KeyboardInterrupt("original interrupt"),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                with (
+                    patch(
+                        "tests.thread_helpers.join_workers",
+                        side_effect=TimeoutError("cleanup"),
+                    ) as join,
+                    self.assertRaises(type(failure)) as raised,
+                    cleanup_workers((), timeout=0.25),
+                ):
+                    raise failure
+                self.assertIs(raised.exception, failure)
+                join.assert_called_once_with((), timeout=0.25)
+
+    def test_successful_context_still_reports_cleanup_timeout(self) -> None:
+        failure = TimeoutError("cleanup deadline")
+        with (
+            patch("tests.thread_helpers.join_workers", side_effect=failure),
+            self.assertRaises(TimeoutError) as raised,
+            cleanup_workers(()),
+        ):
+            pass
+        self.assertIs(raised.exception, failure)
+
+    def test_blocked_cleanup_timeout_preserves_primary_failure(self) -> None:
+        entered = Event()
+        release = Event()
+
+        def wait() -> None:
+            entered.set()
+            if not release.wait(timeout=2):
+                raise AssertionError("Worker was not released")
+
+        worker, completed = start_worker(wait)
+        failure = AssertionError("primary")
+        try:
+            with self.assertRaises(AssertionError) as raised:
+                with cleanup_workers((worker,), timeout=0.01):
+                    self.assertTrue(entered.wait(timeout=2))
+                    raise failure
+            self.assertIs(raised.exception, failure)
+            self.assertTrue(worker.is_alive())
+        finally:
+            release.set()
+            join_workers((worker,))
+        self.assertIsNone(completed.result(timeout=2))
+
+    def test_cleanup_does_not_suppress_other_join_failures(self) -> None:
+        with (
+            patch(
+                "tests.thread_helpers.join_workers",
+                side_effect=RuntimeError("join failed"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "join failed"),
+            cleanup_workers(()),
+        ):
+            raise AssertionError("primary")
+
+    def test_cleanup_releases_and_joins_workers_after_a_primary_failure(self) -> None:
+        entered = Event()
+        release = Event()
+
+        def wait() -> None:
+            entered.set()
+            if not release.wait(timeout=2):
+                raise AssertionError("Worker was not released")
+
+        worker, completed = start_worker(wait)
+        failure = AssertionError("primary")
+        with self.assertRaises(AssertionError) as raised:
+            with cleanup_workers((worker,)):
+                try:
+                    self.assertTrue(entered.wait(timeout=2))
+                    raise failure
+                finally:
+                    release.set()
+        self.assertIs(raised.exception, failure)
+        self.assertIsNone(completed.result(timeout=2))
+        self.assertFalse(worker.is_alive())
+
     def test_join_workers_handles_empty_successful_and_failed_workers(self) -> None:
         join_workers(())
         failure = AssertionError("original worker failure")
