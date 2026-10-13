@@ -95,7 +95,13 @@ class TestAlertNotifier(TestCase):
         self.assertEqual(notifier.consecutive_failures, 0)
 
     def test_webhook_errors_are_logged_and_swallowed(self):
-        for error in (HTTPException("boom"), OSError("net down"), TimeoutError()):
+        for error in (
+            HTTPException("boom"),
+            OSError("net down"),
+            TimeoutError(),
+            ValueError("bad response"),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte"),
+        ):
             with self.subTest(error=type(error).__name__):
                 notifier, logger = _make_notifier()
                 with patch(
@@ -110,3 +116,76 @@ class TestAlertNotifier(TestCase):
                     "Alert webhook failed",
                     logger.warning.call_args.args[0],
                 )
+
+    def test_invalid_direct_webhook_urls_are_contained_for_every_event(self) -> None:
+        for url in (
+            "http://",
+            "ftp://hooks.local/",
+            "http://hooks.local:0/",
+            "http://hooks local/",
+            "http://sta\ttion.local/",
+            "http://" + chr(0xD800) + ".invalid/",
+        ):
+            with self.subTest(url=repr(url)):
+                logger = Mock()
+                notifier = AlertNotifier(
+                    AlertConfig(url, failure_threshold=1),
+                    "http://station.local/",
+                    logger,
+                )
+                with (
+                    patch("socket.getaddrinfo") as dns,
+                    patch("ambientweather2sqlite.mureq.post") as post,
+                ):
+                    notifier.record_failure()
+                    self.assertTrue(notifier.alert_sent)
+                    self.assertEqual(notifier.consecutive_failures, 1)
+                    notifier.record_fetch_success()
+                    notifier.record_success()
+                    for event in ("collection_stalled", "collection_resumed"):
+                        notifier.collection_event(event, None, 300.0)
+                self.assertEqual(logger.warning.call_count, 4)
+                self.assertFalse(notifier.alert_sent)
+                self.assertEqual(notifier.consecutive_failures, 0)
+                post.assert_not_called()
+                dns.assert_not_called()
+
+    def test_transport_value_errors_preserve_outage_counts_and_request_arguments(
+        self,
+    ) -> None:
+        notifier, logger = _make_notifier()
+        with patch(
+            "ambientweather2sqlite.mureq.post",
+            side_effect=ValueError("invalid response"),
+        ) as post:
+            for _ in range(4):
+                notifier.record_failure()
+            notifier.record_fetch_success()
+            notifier.record_success()
+            notifier.collection_event("collection_stalled", None, 300.0)
+            notifier.collection_event("collection_resumed", "2026-10-12 16:00:00", 0)
+            for _ in range(3):
+                notifier.record_failure()
+            notifier.record_success()
+        self.assertEqual(logger.warning.call_count, 6)
+        self.assertEqual(
+            [
+                (
+                    call.kwargs["json"]["event"],
+                    call.kwargs["json"]["consecutive_failures"],
+                )
+                for call in post.call_args_list
+                if call.kwargs["json"]["event"].startswith("station_")
+            ],
+            [
+                ("station_offline", 3),
+                ("station_online", 4),
+                ("station_offline", 3),
+                ("station_online", 3),
+            ],
+        )
+        for call in post.call_args_list:
+            self.assertEqual(call.args, (_CONFIG.webhook_url,))
+            self.assertEqual(call.kwargs["timeout"], _CONFIG.timeout_seconds)
+        self.assertFalse(notifier.alert_sent)
+        self.assertEqual(notifier.consecutive_failures, 0)

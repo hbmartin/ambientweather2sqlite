@@ -3,6 +3,7 @@
 # Internal state verifies that transitions preserve and then clear outage history.
 # ruff: noqa: SLF001
 
+import logging
 import signal
 import socket
 import sqlite3
@@ -34,6 +35,7 @@ from ambientweather2sqlite.database import (
 from ambientweather2sqlite.models import AlertConfig, Observation, RecoveryConfig
 from ambientweather2sqlite.recovery import CollectionMonitor
 from ambientweather2sqlite.station_http import _receiver_lock, station_get
+from tests.thread_helpers import run_worker
 
 _PAGE = '<input name="outTemp" disabled value="72.5">'
 _NOW = datetime(2026, 10, 12, 16, tzinfo=UTC)
@@ -403,6 +405,24 @@ class TestSnapshotClock(TestCase):
 
 
 class TestSignalContext(TestCase):
+    def test_supplied_falsy_logger_is_used_for_opaque_handler_warning(self) -> None:
+        class FalsyLogger(logging.Logger):
+            def __bool__(self) -> bool:
+                return False
+
+        logger = FalsyLogger("supplied")
+        with (
+            patch.object(logger, "warning") as warning,
+            patch("ambientweather2sqlite.daemon.logging.getLogger") as fallback,
+            patch("ambientweather2sqlite.daemon.signal.getsignal", return_value=None),
+            patch("ambientweather2sqlite.daemon.signal.signal") as install,
+            _sigterm_handler(logger),
+        ):
+            pass
+        warning.assert_called_once()
+        fallback.assert_not_called()
+        install.assert_not_called()
+
     def test_restorable_handlers_are_restored_after_body_errors(self) -> None:
         def previous(_signum: int, _frame: object) -> None:
             pass
@@ -471,15 +491,18 @@ class TestSignalContext(TestCase):
         self.assertIn("opaque native handler", logs.output[0])
 
     def test_worker_thread_never_reads_or_changes_signal_handlers(self) -> None:
+        logger = Mock()
+
         def run() -> None:
-            with _sigterm_handler():
+            with _sigterm_handler(logger):
                 pass
 
         with (
             patch("ambientweather2sqlite.daemon.signal.getsignal") as read,
             patch("ambientweather2sqlite.daemon.signal.signal") as install,
-            ThreadPoolExecutor(max_workers=1) as executor,
         ):
-            executor.submit(run).result(timeout=2)
+            run_worker(run)
         read.assert_not_called()
         install.assert_not_called()
+        logger.warning.assert_called_once()
+        self.assertIn("outside the main thread", logger.warning.call_args.args[0])

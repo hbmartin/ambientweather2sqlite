@@ -2,6 +2,8 @@ import tomllib
 from pathlib import Path
 from typing import overload
 
+from .http_validation import parse_http_url
+from .http_validation import validate_port as _validate_port
 from .models import (
     AlertConfig,
     AppConfig,
@@ -9,13 +11,11 @@ from .models import (
     RecoveryConfig,
     RediscoveryConfig,
 )
-from .station_http import _receiver_address
 
 _CURRENT_PATH = Path.cwd()
 _DEFAULT_CONFIG_NAME = "aw2sqlite.toml"
 _DEFAULT_DATABASE_NAME = "aw2sqlite.db"
 _VALID_LOG_FORMATS = frozenset({"text", "json"})
-_MAX_PORT = 65535
 
 
 def _config_type_error(key: str, expected_type: str) -> TypeError:
@@ -119,24 +119,16 @@ def _validate_url(value: str, key: str) -> str:
     if not value.startswith(("http://", "https://")):
         msg = f"{key} must start with http:// or https://"
         raise ValueError(msg)
-    return value
-
-
-def _validate_receiver_url(value: str) -> str:
-    _validate_url(value, "live_data_url")
     try:
-        _receiver_address(value)
+        parse_http_url(value)
     except (ValueError,) as error:  # noqa: B013
-        msg = f"live_data_url is invalid: {error}"
+        msg = f"{key} is invalid: {error}"
         raise ValueError(msg) from error
     return value
 
 
-def _validate_port(value: int | None, key: str) -> int | None:
-    if value is not None and not (1 <= value <= _MAX_PORT):
-        msg = f"{key} must be between 1 and {_MAX_PORT}"
-        raise ValueError(msg)
-    return value
+def _validate_receiver_url(value: str) -> str:
+    return _validate_url(value, "live_data_url")
 
 
 def _require_table(value: object, key: str) -> dict[str, object]:
