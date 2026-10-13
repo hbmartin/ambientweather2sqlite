@@ -1,6 +1,6 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from http.client import HTTPException
-from threading import Event
+from threading import Event, Thread
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
@@ -18,6 +18,26 @@ _CONFIG = AlertConfig(
 def _make_notifier() -> tuple[AlertNotifier, Mock]:
     logger = Mock()
     return AlertNotifier(_CONFIG, "http://127.0.0.1/livedata.htm", logger), logger
+
+
+def _start_collection_event(
+    notifier: AlertNotifier, event: str, *, started: Event | None = None
+) -> tuple[Thread, Future[None]]:
+    result: Future[None] = Future()
+
+    def send() -> None:
+        if started is not None:
+            started.set()
+        try:
+            notifier.collection_event(event, None, 300)
+        except (BaseException,) as error:  # noqa: BLE001, B013
+            result.set_exception(error)
+        else:
+            result.set_result(None)
+
+    thread = Thread(target=send, daemon=True)
+    thread.start()
+    return thread, result
 
 
 class TestAlertNotifier(TestCase):
@@ -252,6 +272,103 @@ class TestAlertNotifier(TestCase):
         post.assert_not_called()
         self.assertTrue(notifier.alert_sent)
         self.assertEqual(notifier.consecutive_failures, 7)
+
+    def test_concurrent_valid_events_wait_for_validation_and_both_deliver(self) -> None:
+        entered = Event()
+        second_started = Event()
+        release = Event()
+        notifier, logger = _make_notifier()
+        workers: list[tuple[Thread, Future[None]]] = []
+
+        def validate(url: str) -> None:
+            entered.set()
+            if not release.wait(timeout=2):
+                raise AssertionError("Validation was not released")
+            parse_http_url(url)
+
+        with (
+            patch(
+                "ambientweather2sqlite.alerts.parse_http_url", side_effect=validate
+            ) as parse,
+            patch("ambientweather2sqlite.mureq.post") as post,
+        ):
+            try:
+                workers.append(_start_collection_event(notifier, "collection_stalled"))
+                self.assertTrue(entered.wait(timeout=2))
+                workers.append(
+                    _start_collection_event(
+                        notifier, "collection_resumed", started=second_started
+                    )
+                )
+                self.assertTrue(second_started.wait(timeout=2))
+                with self.assertRaises(TimeoutError):
+                    workers[1][1].result(timeout=0.05)
+                release.set()
+                for _, result in workers:
+                    result.result(timeout=2)
+            finally:
+                release.set()
+                for thread, _ in workers:
+                    thread.join(timeout=2)
+        for thread, _ in workers:
+            self.assertFalse(thread.is_alive())
+        parse.assert_called_once_with(_CONFIG.webhook_url)
+        self.assertCountEqual(
+            [call.kwargs["json"]["event"] for call in post.call_args_list],
+            ["collection_stalled", "collection_resumed"],
+        )
+        for call in post.call_args_list:
+            self.assertEqual(call.args, (_CONFIG.webhook_url,))
+            self.assertEqual(call.kwargs["timeout"], _CONFIG.timeout_seconds)
+        logger.warning.assert_not_called()
+
+    def test_blocked_warning_allows_cached_events_and_url_replacement(self) -> None:
+        entered = Event()
+        release = Event()
+        logger = Mock()
+        notifier = AlertNotifier(
+            AlertConfig("http://"), "http://station.local/", logger
+        )
+        workers: list[tuple[Thread, Future[None]]] = []
+
+        def warning(_message: str, _error: ValueError) -> None:
+            entered.set()
+            if not release.wait(timeout=2):
+                raise AssertionError("Warning was not released")
+
+        logger.warning.side_effect = warning
+        with (
+            patch(
+                "ambientweather2sqlite.alerts.parse_http_url", wraps=parse_http_url
+            ) as parse,
+            patch("ambientweather2sqlite.mureq.post") as post,
+        ):
+            try:
+                workers.append(_start_collection_event(notifier, "collection_stalled"))
+                self.assertTrue(entered.wait(timeout=2))
+                workers.append(_start_collection_event(notifier, "collection_resumed"))
+                workers[1][1].result(timeout=1)
+                parse.assert_called_once_with("http://")
+                logger.warning.assert_called_once()
+                post.assert_not_called()
+                notifier.config = _CONFIG
+                workers.append(_start_collection_event(notifier, "collection_resumed"))
+                workers[2][1].result(timeout=1)
+                self.assertEqual(parse.call_count, 2)
+                release.set()
+                workers[0][1].result(timeout=2)
+            finally:
+                release.set()
+                for thread, _ in workers:
+                    thread.join(timeout=2)
+        for thread, _ in workers:
+            self.assertFalse(thread.is_alive())
+        logger.warning.assert_called_once()
+        post.assert_called_once()
+        self.assertEqual(post.call_args.args, (_CONFIG.webhook_url,))
+        self.assertEqual(post.call_args.kwargs["json"]["event"], "collection_resumed")
+        self.assertEqual(notifier.consecutive_failures, 0)
+        self.assertFalse(notifier.alert_sent)
 
     def test_validation_lock_does_not_serialize_deliveries(self) -> None:
         entered = Event()
