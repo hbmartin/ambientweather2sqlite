@@ -1,8 +1,8 @@
 """Daemon workers with exception propagation and explicit bounded cleanup."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Generator, Iterable
 from concurrent.futures import Future
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from threading import Thread
 from time import monotonic
 
@@ -37,6 +37,24 @@ def join_workers(threads: Iterable[Thread], *, timeout: float = 2) -> None:
     if any(thread.is_alive() for thread in workers):
         msg = "Test workers did not stop before their deadline"
         raise TimeoutError(msg)
+
+
+@contextmanager
+def cleanup_workers(
+    threads: Iterable[Thread], *, timeout: float = 2
+) -> Generator[None]:
+    """Join on exit, preserving a primary failure if bounded cleanup times out.
+
+    Release blocking events inside the context before its cleanup runs.
+    """
+    try:
+        yield
+    except (BaseException,):  # noqa: B013
+        with suppress(TimeoutError):
+            join_workers(threads, timeout=timeout)
+        raise
+    else:
+        join_workers(threads, timeout=timeout)
 
 
 def run_worker(action: Callable[[], None], *, timeout: float = 2) -> None:

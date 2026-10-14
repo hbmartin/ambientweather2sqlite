@@ -698,7 +698,7 @@ class TestConfiguration(TestCase):
             ("HTTP://BÜCHER.local/気象🌧️?name=☀️", "/tmp/気象🌧️.db"),
             (
                 'https://station.local/🌧️?name="rain"' + r"\u0061",
-                'weather"🌧️\\\x00\x01\b\f\n\r\t\x1f\x7f.db',
+                'weather"🌧️\\\x01\b\f\n\r\t\x1f\x7f.db',
             ),
         )
         for url, database_path in cases:
@@ -951,7 +951,7 @@ class TestSetupInputValidation(TestCase):
     def test_invalid_database_default_reprompts_for_a_valid_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
-            responses = iter(["n", "http://station.local/", "", "weather.db", ""])
+            responses = iter(["n", "http://station.local/", "", "", "weather.db", ""])
 
             def prompt(message: str) -> str:
                 message.encode("utf-8")
@@ -970,10 +970,14 @@ class TestSetupInputValidation(TestCase):
             ):
                 created = configuration.create_config_file(path)
             self.assertEqual(load_config(created).database_path, "weather.db")
-            self.assertEqual(inputs.call_count, 5)
+            self.assertEqual(inputs.call_count, 6)
             self.assertIn(
-                "Invalid database path: surrogate characters", output.call_args.args[0]
+                "Default database path is unavailable: surrogate characters",
+                output.call_args.args[0],
             )
+            self.assertEqual(output.call_count, 3)
+            for call in inputs.call_args_list[2:5]:
+                self.assertNotIn("leave blank for default", call.args[0])
 
     def test_encoder_defense_precedes_output_open_for_direct_invalid_values(
         self,

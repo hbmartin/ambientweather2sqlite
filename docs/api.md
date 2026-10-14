@@ -38,6 +38,11 @@ writing and accepts server ports as ASCII decimal digits in `1–65535`, or
 blank to disable. Leading zeros are saved as a canonical integer. Generated
 TOML preserves accepted strings through escaping; see
 [setup guidance](https://github.com/hbmartin/ambientweather2sqlite#configuration).
+Database paths containing NUL are rejected before SQLite is opened. An
+invalid database default requires an explicit replacement. Output filenames
+use native filesystem rules and are displayed safely; interactive filename
+or save failures retry only output selection. Explicit `--config` failures
+exit with a setup diagnostic.
 At runtime, unsupported schemes and other URL validation failures
 are reported as
 `Invalid receiver URL`; UTF-8 response-decoding failures use

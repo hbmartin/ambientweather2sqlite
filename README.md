@@ -314,10 +314,26 @@ Unicode. URL and database-path values containing surrogate characters, such
 as undecodable terminal bytes, display an error and prompt again before the
 output file is opened.
 
+Database paths must also be free of NUL characters; configuration loading
+rejects them before opening SQLite. If the absolute default database path
+cannot be saved as Unicode, setup explains that the default is unavailable
+and requires an explicit path. Blank input then silently prompts again.
+
+Output filenames follow the operating system's filesystem encoding rather
+than the TOML string rules. NUL and unencodable filenames are rejected;
+native surrogate-escaped filenames remain supported where the filesystem
+allows them. Surrogate characters are escaped only in displayed paths.
+An invalid filename or an interactive save failure prompts for another
+output filename while retaining the URL, database path, and port answers.
+An explicitly supplied `--config` path instead reports a setup error and
+exits unsuccessfully without asking for a replacement.
+
 The setup server port accepts ASCII decimal digits in `1–65535`, or blank to
 disable the server. Invalid input displays a reason and prompts again.
 Leading zeros are accepted and saved as a canonical decimal integer. This
 prompt restriction does not change integer syntax in existing TOML files.
+Station selection also accepts ASCII decimal digits, including leading
+zeros; invalid or out-of-range choices prompt again.
 
 ### Config File
 

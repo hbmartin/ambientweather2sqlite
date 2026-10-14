@@ -168,6 +168,11 @@ server ports before writing. Ports accept ASCII decimal digits in `1–65535`,
 or blank to disable, and leading zeros are saved as a canonical integer.
 Generated TOML preserves accepted strings through escaping; see
 [setup guidance](https://github.com/hbmartin/ambientweather2sqlite#configuration).
+NUL database paths are rejected before startup, and an unavailable database
+default requires an explicit path. Output filenames retain native filesystem
+encoding support. Interactive filename/save failures retry output selection
+without discarding earlier answers; explicit `--config` failures report an
+error and exit. Display escaping changes no stored path.
 Runtime invalid-URL diagnostics are
 separate from receiver request failures, including invalid UTF-8 responses; runtime errors
 continue through the normal retry path.

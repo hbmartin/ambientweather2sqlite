@@ -3,11 +3,12 @@ import json
 import sqlite3
 import sys
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from ambientweather2sqlite.configuration import (
+    _display_setup_text,
     create_config_file,
     get_config_path,
     load_config,
@@ -35,8 +36,22 @@ from .parser import parse_args
 
 def _resolve_config(args: argparse.Namespace) -> Path:
     """Resolve config path, creating if necessary."""
-    default_config_path = getattr(args, "config_path", None) or get_config_path()
-    return create_config_file(default_config_path)
+    with _report_setup_errors():
+        default_config_path = getattr(args, "config_path", None) or get_config_path()
+        return create_config_file(default_config_path)
+
+
+@contextmanager
+def _report_setup_errors() -> Generator[None]:
+    """Report expected setup failures without masking unrelated command errors."""
+    try:
+        yield
+    except (OSError, ValueError) as error:
+        print(
+            _display_setup_text(f"Configuration setup failed: {error}"),
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _load_config_or_exit(config_path: Path) -> AppConfig:
@@ -44,7 +59,10 @@ def _load_config_or_exit(config_path: Path) -> AppConfig:
     try:
         return load_config(config_path)
     except (TypeError, ValueError, OSError, tomllib.TOMLDecodeError) as e:
-        print(f"Configuration error in {config_path}: {e}", file=sys.stderr)
+        print(
+            _display_setup_text(f"Configuration error in {config_path}: {e}"),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -80,8 +98,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
 def _cmd_config(args: argparse.Namespace) -> None:
     config_path = args.config_path
-    created_path = create_config_file(config_path, overwrite_existing=True)
-    print(f"Configuration saved to {created_path}")
+    with _report_setup_errors():
+        created_path = create_config_file(config_path, overwrite_existing=True)
+    print(_display_setup_text(f"Configuration saved to {created_path}"))
 
 
 def _cmd_once(args: argparse.Namespace) -> None:
