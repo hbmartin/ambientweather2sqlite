@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/ambientweather2sqlite.svg)](https://pypi.org/project/ambientweather2sqlite/)
 [![Python](https://img.shields.io/pypi/pyversions/ambientweather2sqlite.svg)](https://pypi.org/project/ambientweather2sqlite/)
-[![License](https://img.shields.io/pypi/l/ambientweather2sqlite.svg)](LICENSE.md)
+[![License](https://img.shields.io/pypi/l/ambientweather2sqlite.svg)](https://github.com/hbmartin/ambientweather2sqlite/blob/main/LICENSE.md)
 [![Lint](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml/badge.svg)](https://github.com/hbmartin/ambientweather2sqlite/actions/workflows/lint.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![codecov](https://codecov.io/gh/hbmartin/ambientweather2sqlite/graph/badge.svg?token=3gZI67ci1N)](https://codecov.io/gh/hbmartin/ambientweather2sqlite)
@@ -49,8 +49,8 @@ Your station already serves its readings on your own network. This reads them st
 * **Zero Dependencies:** Pure Python with no (potentially) untrusted 3rd parties
 * **Auto-Discovery:** The setup wizard scans your subnet and finds the station for you, and if DHCP later moves the station to a new IP the daemon rescans and re-identifies it by MAC address automatically
 * **A Database That Keeps Up With Your Hardware:** Sensor columns are added automatically as new readings appear, timestamps are deduplicated across restarts, stale console pages are skipped so an unchanged reading never becomes a fake per-minute sample, and implausible values are flagged
-* **Plugs Into What You Already Run:** Home Assistant (MQTT discovery), Prometheus and Grafana (`/metrics`), and Datasette (generated metadata) - see [Recipes](docs/recipes.md)
-* **Runs As A Service:** Docker, launchd, and systemd units included, with an [HTTP JSON API](docs/api.md) for live and aggregated data
+* **Plugs Into What You Already Run:** Home Assistant (MQTT discovery), Prometheus and Grafana (`/metrics`), and Datasette (generated metadata) - see [Recipes](https://hbmartin.github.io/ambientweather2sqlite/recipes/)
+* **Runs As A Service:** Docker, launchd, and systemd units included, with an [HTTP JSON API](https://hbmartin.github.io/ambientweather2sqlite/api/) for live and aggregated data
 
 ## Installation
 
@@ -466,7 +466,7 @@ collision-free physical name and stores its label/unit metadata.
 
 SQLite is configured with WAL journal mode, normal synchronous writes, in-memory temp storage, and 256MB memory-mapped I/O.
 
-**→ [Full database design reference](docs/database.md)** - schema evolution, timestamp semantics, indexes, migrations, concurrency, backup behavior, and integrity boundaries.
+**→ [Full database design reference](https://hbmartin.github.io/ambientweather2sqlite/database/)** - schema evolution, timestamp semantics, indexes, migrations, concurrency, backup behavior, and integrity boundaries.
 
 ### Embedded collection recovery monitor
 
@@ -520,8 +520,8 @@ collector does not read or replace it from the worker thread.
 The HTTP health endpoint has a separate purpose and threshold: it returns `503`
 when observations are older than 180 seconds, while the collection monitor's
 outage notification defaults to 300 seconds and uses verified recovery checks.
-See [HTTP health](docs/api.md#get-health-health-check) and
-[monitoring recipes](docs/recipes.md#uptime-monitoring).
+See [HTTP health](https://hbmartin.github.io/ambientweather2sqlite/api/#get-health-health-check) and
+[monitoring recipes](https://hbmartin.github.io/ambientweather2sqlite/recipes/#uptime-monitoring).
 
 Optional settings in `aw2sqlite.toml`:
 
@@ -558,11 +558,11 @@ When a port is configured, the daemon serves HTTP requests concurrently on backg
 | `GET /health` | Health check; returns `503` once collection has stalled |
 | `GET /metrics` | Database metrics as JSON, or Prometheus text for a scraper |
 
-**→ [Full API reference](docs/api.md)** - query parameters, response bodies, aggregation fields, timezone formats, and error codes.
+**→ [Full API reference](https://hbmartin.github.io/ambientweather2sqlite/api/)** - query parameters, response bodies, aggregation fields, timezone formats, and error codes.
 
 ## Recipes
 
-Copy-paste configurations for [Datasette](docs/recipes.md#datasette), [Prometheus and Grafana](docs/recipes.md#prometheus-and-grafana), [Home Assistant](docs/recipes.md#home-assistant), [uptime monitoring](docs/recipes.md#uptime-monitoring), [nightly backups](docs/recipes.md#nightly-backups), and [ad-hoc SQL analysis](docs/recipes.md#ad-hoc-analysis).
+Copy-paste configurations for [Datasette](https://hbmartin.github.io/ambientweather2sqlite/recipes/#datasette), [Prometheus and Grafana](https://hbmartin.github.io/ambientweather2sqlite/recipes/#prometheus-and-grafana), [Home Assistant](https://hbmartin.github.io/ambientweather2sqlite/recipes/#home-assistant), [uptime monitoring](https://hbmartin.github.io/ambientweather2sqlite/recipes/#uptime-monitoring), [nightly backups](https://hbmartin.github.io/ambientweather2sqlite/recipes/#nightly-backups), and [ad-hoc SQL analysis](https://hbmartin.github.io/ambientweather2sqlite/recipes/#ad-hoc-analysis).
 
 ## Development
 
@@ -570,13 +570,18 @@ Pull requests and issue reports are welcome. For major changes, please open an i
 
 ```bash
 uv sync --dev
+uv run --locked pyroma .
 uv run pytest tests/ --cov=ambientweather2sqlite
 ```
 
-**→ [Development guide](docs/development.md)** - the full check suite, Semgrep rules, project conventions, and architecture diagrams.
+Package metadata uses [pyroma621](https://hbmartin.github.io/pyroma621/), pinned to
+6.2.0. The `pyroma` command applies the project's strict 10/10 policy, including
+advisory checks, locally and in CI. The pin makes checker upgrades deliberate.
+
+**→ [Development guide](https://hbmartin.github.io/ambientweather2sqlite/development/)** - the full check suite, Semgrep rules, project conventions, and architecture diagrams.
 
 ## Legal
 
-&copy; [Harold Martin](https://www.linkedin.com/in/harold-martin-98526971/) - released under [GPLv3](LICENSE.md)
+&copy; [Harold Martin](https://www.linkedin.com/in/harold-martin-98526971/) - released under [GPLv3](https://github.com/hbmartin/ambientweather2sqlite/blob/main/LICENSE.md)
 
 AmbientWeather is a trademark of Ambient, LLC.

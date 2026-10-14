@@ -28,7 +28,7 @@ uv run ty check ambientweather2sqlite
 Run the full suite before opening a pull request:
 
 ```bash
-uv run pyroma .                                    # package metadata
+uv run --locked pyroma .                          # package metadata; strict 10/10
 uv run deptry ambientweather2sqlite                # dependency hygiene
 uv run lizard -Eduplicate ambientweather2sqlite    # complexity and duplication
 uv run pytest tests/ --cov=ambientweather2sqlite   # tests; coverage must stay >= 92%
@@ -36,6 +36,14 @@ uv run pytest tests/ --cov=ambientweather2sqlite   # tests; coverage must stay >
 
 CI runs all of the above against Python 3.13 and 3.14 on every push and pull
 request.
+
+Package metadata is checked with [pyroma621](https://hbmartin.github.io/pyroma621/),
+pinned to 6.2.0 so changes to its checks can be reviewed before upgrading. It
+provides the `pyroma` command and Python module. The `[tool.pyroma]` configuration
+requires a strict 10/10 rating, including advisory checks, without skipping any
+checks. `uv run --locked pyroma .` applies this policy locally and in CI.
+When checking a built source distribution, pass `--strict --min 10` explicitly;
+archive mode does not load the project's configuration.
 
 ## Semgrep
 
