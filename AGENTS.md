@@ -6,7 +6,8 @@
 - Tests use pytest-compatible `unittest.TestCase` classes. Use Hypothesis for invariant and round-trip coverage where property-based tests fit.
 - Always run `uv run ruff format ambientweather2sqlite tests` and `uv run ruff check ambientweather2sqlite tests --fix` after making changes.
 - Run `uv run pyrefly check ambientweather2sqlite` and `uv run ty check ambientweather2sqlite` after making changes.
-- Run `uv run pyroma .`, `uv run deptry ambientweather2sqlite`, and `uv run lizard -Eduplicate ambientweather2sqlite` after finishing implementation.
+- Package metadata is checked by `pyroma621==6.2.0`, which provides `pyroma`; require strict 10/10 without skipping checks.
+- Run `uv run --locked pyroma .`, `uv run deptry ambientweather2sqlite`, and `uv run lizard -Eduplicate ambientweather2sqlite` after finishing implementation.
 - Run `uv run pytest tests/ --cov=ambientweather2sqlite` after finishing implementation; coverage must remain at or above the configured threshold.
 - Any user-facing changes (e.g. new CLI flags) should be documented in the `README.md`.
 - Use `uv` not `python` for running scripts.

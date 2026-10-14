@@ -48,11 +48,15 @@ dev = [
     "pyrefly>=0.55.0",
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
-    "pyroma>=5.0.1",
+    "pyroma621==6.2.0",
     "ruff>=0.15.5",
     "ty>=0.0.21",
     "zensical>=0.0.50",
 ]
+
+[tool.pyroma]
+min-rating = 10
+strict = true
 
 [tool.coverage.run]
 relative_files = true
