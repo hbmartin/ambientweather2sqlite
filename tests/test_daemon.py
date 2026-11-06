@@ -322,6 +322,9 @@ class TestDaemonDiscovery(TestCase):
     )
 
     def setUp(self):
+        self.database_path = str(
+            Path(self.enterContext(tempfile.TemporaryDirectory())) / "weather.db"
+        )
         _patch_rediscovery_network(self)
 
     def _run_daemon(
@@ -364,7 +367,7 @@ class TestDaemonDiscovery(TestCase):
             with self.assertRaises(SystemExit):
                 start_daemon(
                     "http://127.0.0.1/livedata.htm",
-                    "/tmp/weather.db",
+                    self.database_path,
                     period_seconds=5,
                     mqtt_config=mqtt_config,
                 )
@@ -407,6 +410,9 @@ class TestDaemonDiscovery(TestCase):
 
 class TestDaemonAlerts(TestCase):
     def setUp(self):
+        self.database_path = str(
+            Path(self.enterContext(tempfile.TemporaryDirectory())) / "weather.db"
+        )
         _patch_rediscovery_network(self)
 
     def test_start_daemon_counts_failures_in_both_branches(self):
@@ -441,7 +447,7 @@ class TestDaemonAlerts(TestCase):
             with self.assertRaises(SystemExit) as exc:
                 start_daemon(
                     "http://127.0.0.1/livedata.htm",
-                    "/tmp/weather.db",
+                    self.database_path,
                     period_seconds=5,
                     alert_config=alert_config,
                 )
@@ -482,7 +488,7 @@ class TestDaemonAlerts(TestCase):
             with self.assertRaises(SystemExit) as exc:
                 start_daemon(
                     "http://127.0.0.1/livedata.htm",
-                    "/tmp/weather.db",
+                    self.database_path,
                     period_seconds=5,
                     alert_config=AlertConfig(webhook_url="http://hooks.local/alert"),
                 )
@@ -528,7 +534,7 @@ class TestDaemonAlerts(TestCase):
             with self.assertRaises(SystemExit) as exc:
                 start_daemon(
                     "http://127.0.0.1/livedata.htm",
-                    "/tmp/weather.db",
+                    self.database_path,
                     period_seconds=5,
                     alert_config=AlertConfig(webhook_url="http://hooks.local/alert"),
                 )
@@ -539,6 +545,11 @@ class TestDaemonAlerts(TestCase):
 
 
 class TestDaemonRediscovery(TestCase):
+    def setUp(self):
+        self.database_path = str(
+            Path(self.enterContext(tempfile.TemporaryDirectory())) / "weather.db"
+        )
+
     _OLD_URL = "http://127.0.0.1/livedata.htm"
     _NEW_URL = "http://192.168.0.150/livedata.htm"
     _MAC = "aa:bb:cc:dd:ee:ff"
@@ -602,7 +613,7 @@ class TestDaemonRediscovery(TestCase):
             with self.assertRaises(SystemExit) as exc:
                 start_daemon(
                     self._OLD_URL,
-                    "/tmp/weather.db",
+                    self.database_path,
                     port=port,
                     period_seconds=5,
                     alert_config=alert_config,
@@ -634,7 +645,7 @@ class TestDaemonRediscovery(TestCase):
         mocks["find"].assert_called_once()
         mocks["server"].update_live_data_url.assert_called_once_with(self._NEW_URL)
         self.assertEqual(mocks["notifier"].station_url, self._NEW_URL)
-        mocks["insert"].assert_called_once_with("/tmp/weather.db", {"tempf": 72.5})
+        mocks["insert"].assert_called_once_with(self.database_path, {"tempf": 72.5})
         warning_args = mocks["logger"].warning.call_args.args
         self.assertIn("Weather station moved", warning_args[0])
         self.assertIn(self._OLD_URL, warning_args)
@@ -687,14 +698,16 @@ class TestDaemonRediscovery(TestCase):
         polled_urls = [c.args[0] for c in mocks["fetch"].call_args_list]
         self.assertEqual(polled_urls, [self._OLD_URL] * 3)
 
-    def test_mac_is_captured_once_after_first_success(self):
+    def test_mac_is_captured_then_verified_on_later_pages(self):
         mocks = self._run_daemon(
             fetch_side_effect=["<html />", "<html />"],
             wait_side_effect=[None, KeyboardInterrupt],
             captured_mac=self._MAC,
         )
 
-        mocks["mac"].assert_called_once_with("127.0.0.1")
+        self.assertEqual(
+            mocks["mac"].call_args_list, [call("127.0.0.1"), call("127.0.0.1")]
+        )
 
 
 class TestFetchOnce(TestCase):
@@ -719,6 +732,9 @@ class TestFetchOnce(TestCase):
 
 class TestStartDaemon(TestCase):
     def setUp(self):
+        self.database_path = str(
+            Path(self.enterContext(tempfile.TemporaryDirectory())) / "weather.db"
+        )
         _patch_rediscovery_network(self)
 
     def test_start_daemon_survives_metadata_database_errors(self) -> None:
@@ -743,14 +759,14 @@ class TestStartDaemon(TestCase):
                 ):
                     start_daemon(
                         "http://127.0.0.1/livedata.htm",
-                        "/tmp/weather.db",
+                        self.database_path,
                     )
 
                 self.assertEqual(exc.exception.code, 0)
                 logger.info.assert_called_once()
 
     def test_start_daemon_processes_one_update_and_shuts_down_server(self):
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         server = Mock()
         logger = Mock()
 
@@ -824,7 +840,7 @@ class TestStartDaemon(TestCase):
         )
 
     def test_start_daemon_non_interactive_suppresses_live_display(self):
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         logger = Mock()
 
         with (
@@ -875,7 +891,7 @@ class TestStartDaemon(TestCase):
         self.assertFalse(any(line.startswith("Updated at:") for line in printed))
 
     def test_start_daemon_timeout_is_quiet_when_non_interactive(self):
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         logger = Mock()
 
         with (
@@ -914,7 +930,7 @@ class TestStartDaemon(TestCase):
         mock_wait.assert_called_once()
 
     def test_start_daemon_logs_metadata_and_live_data_http_errors(self):
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         logger = Mock()
         server = Mock()
 
@@ -963,7 +979,7 @@ class TestStartDaemon(TestCase):
         )
 
     def test_start_daemon_survives_insert_errors_without_publishing(self) -> None:
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         logger = Mock()
 
         with (
@@ -1013,7 +1029,7 @@ class TestStartDaemon(TestCase):
         mock_publish.assert_not_called()
 
     def test_start_daemon_skips_insert_when_fetch_parses_zero_sensors(self):
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         logger = Mock()
 
         with (
@@ -1062,7 +1078,7 @@ class TestStartDaemon(TestCase):
         )
 
     def test_start_daemon_paces_retries_after_timeout(self) -> None:
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         logger = Mock()
 
         with (
@@ -1104,7 +1120,7 @@ class TestStartDaemon(TestCase):
         )
 
     def test_start_daemon_continues_after_live_data_http_error(self):
-        database_path = "/tmp/weather.db"
+        database_path = self.database_path
         logger = Mock()
 
         with (
@@ -1330,6 +1346,9 @@ class TestCollectForeverStaleDedup(TestCase):
 
 class TestStartDaemonStaleDedup(TestCase):
     def setUp(self):
+        self.database_path = str(
+            Path(self.enterContext(tempfile.TemporaryDirectory())) / "weather.db"
+        )
         _patch_rediscovery_network(self)
 
     def _run_two_cycles(
@@ -1378,7 +1397,7 @@ class TestStartDaemonStaleDedup(TestCase):
             with self.assertRaises(SystemExit) as exc:
                 start_daemon(
                     "http://127.0.0.1/livedata.htm",
-                    "/tmp/weather.db",
+                    self.database_path,
                     period_seconds=5,
                     interactive=False,
                 )
@@ -1392,7 +1411,7 @@ class TestStartDaemonStaleDedup(TestCase):
             station_time_side_effect=["14:47 9/21/2021", "14:47 9/21/2021"],
         )
 
-        mock_insert.assert_called_once_with("/tmp/weather.db", {"outTemp": 72.5})
+        mock_insert.assert_called_once_with(self.database_path, {"outTemp": 72.5})
         mock_publish.assert_called_once()
 
     def test_changed_page_stores_each_cycle(self):

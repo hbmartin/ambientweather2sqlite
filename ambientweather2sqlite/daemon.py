@@ -488,7 +488,9 @@ def _collect_forever(  # noqa: PLR0913
             logger,
             interactive=interactive,
         )
-        if not live_data:
+        if not live_data or (
+            rediscovery is not None and not rediscovery.accepts_current_station()
+        ):
             live_data_url, extra_lines = _handle_failed_cycle(
                 notifier,
                 rediscovery,
@@ -637,7 +639,12 @@ def _serve_station(  # noqa: PLR0913
 
         rediscovery_config = rediscovery_config or RediscoveryConfig()
         rediscovery = (
-            StationRediscovery(rediscovery_config, live_data_url, logger)
+            StationRediscovery(
+                rediscovery_config,
+                live_data_url,
+                logger,
+                state_path=Path(database_path).with_suffix(".receiver.json"),
+            )
             if rediscovery_config.enabled
             else None
         )

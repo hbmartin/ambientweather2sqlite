@@ -1,3 +1,6 @@
+import json
+import tempfile
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
@@ -74,20 +77,19 @@ class TestFindStationByMac(TestCase):
 
         self.assertEqual(find_station_by_mac(None), (_NEW_URL, None))
 
-    def test_single_candidate_fallback_when_mac_lookup_unavailable(
+    def test_known_identity_refuses_fallback_when_mac_lookup_unavailable(
         self,
         mock_subnet: Mock,
         mock_scan: Mock,
         mock_probe: Mock,
         mock_mac: Mock,
     ):
-        # A stored MAC with no readable candidate MACs cannot disprove a
-        # match, so the lone station is still accepted.
+        # Missing MAC evidence must not erase an established identity.
         mock_scan.return_value = ["192.168.0.150"]
         mock_probe.side_effect = lambda ip: f"http://{ip}/livedata.htm"
         mock_mac.return_value = None
 
-        self.assertEqual(find_station_by_mac(_MAC), (_NEW_URL, None))
+        self.assertIsNone(find_station_by_mac(_MAC))
 
     def test_ambiguous_multiple_candidates_without_macs(
         self,
@@ -298,3 +300,106 @@ class TestStationRediscovery(TestCase):
         self.assertEqual(mock_mac.call_count, 2)
         self.assertIsNone(tracker.mac_address)
         logger.info.assert_not_called()
+
+
+class TestPersistentReceiverIdentity(TestCase):
+    def test_address_change_after_restart_keeps_physical_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "station.receiver.json"
+            tracker = StationRediscovery(
+                RediscoveryConfig(),
+                _OLD_URL,
+                Mock(),
+                state_path=state_path,
+            )
+            with patch(
+                "ambientweather2sqlite.rediscovery.get_mac_address", return_value=_MAC
+            ):
+                tracker.record_success()
+            restored = StationRediscovery(
+                RediscoveryConfig(),
+                _OLD_URL,
+                Mock(),
+                state_path=state_path,
+            )
+            self.assertEqual(restored.mac_address, _MAC)
+            with patch(
+                "ambientweather2sqlite.rediscovery.find_station_by_mac",
+                return_value=(_NEW_URL, _MAC),
+            ) as find:
+                restored.record_failure()
+                self.assertEqual(restored.record_failure(), _NEW_URL)
+                find.assert_called_once_with(_MAC)
+            self.assertEqual(
+                json.loads(state_path.read_text())["configured_url"], _OLD_URL
+            )
+            self.assertEqual(list(Path(directory).iterdir()), [state_path])
+
+    def test_state_from_another_configured_receiver_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "receiver.json"
+            state_path.write_text(
+                json.dumps({"configured_url": _NEW_URL, "mac_address": _MAC})
+            )
+            tracker = StationRediscovery(
+                RediscoveryConfig(), _OLD_URL, Mock(), state_path=state_path
+            )
+            self.assertIsNone(tracker.mac_address)
+
+    def test_invalid_state_is_logged_without_stopping_collection(self):
+        for content in (
+            "{",
+            "[]",
+            json.dumps({"configured_url": _OLD_URL, "mac_address": "not-a-mac"}),
+        ):
+            with (
+                self.subTest(content=content),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                state_path = Path(directory) / "receiver.json"
+                state_path.write_text(content)
+                logger = Mock()
+                tracker = StationRediscovery(
+                    RediscoveryConfig(), _OLD_URL, logger, state_path=state_path
+                )
+                self.assertIsNone(tracker.mac_address)
+                logger.warning.assert_called_once()
+
+    def test_unwritable_state_does_not_prevent_relocation(self):
+        tracker = StationRediscovery(
+            RediscoveryConfig(),
+            _OLD_URL,
+            Mock(),
+            mac_address=_MAC,
+            state_path=Path("/nonexistent-weather-test-directory/receiver.json"),
+        )
+        with patch(
+            "ambientweather2sqlite.rediscovery.find_station_by_mac",
+            return_value=(_NEW_URL, _MAC),
+        ):
+            tracker.record_failure()
+            self.assertEqual(tracker.record_failure(), _NEW_URL)
+        tracker.logger.warning.assert_called()
+
+    def test_reassigned_old_ip_is_rejected_without_forgetting_identity(self):
+        tracker = StationRediscovery(
+            RediscoveryConfig(), _OLD_URL, Mock(), mac_address=_MAC
+        )
+        with patch(
+            "ambientweather2sqlite.rediscovery.get_mac_address",
+            return_value="11:22:33:44:55:66",
+        ):
+            self.assertFalse(tracker.accepts_current_station())
+        self.assertEqual(tracker.mac_address, _MAC)
+
+    def test_matching_or_unreadable_current_identity_is_accepted(self):
+        tracker = StationRediscovery(
+            RediscoveryConfig(), _OLD_URL, Mock(), mac_address=_MAC
+        )
+        for mac in (_MAC, None):
+            with patch(
+                "ambientweather2sqlite.rediscovery.get_mac_address", return_value=mac
+            ):
+                self.assertTrue(tracker.accepts_current_station())
+        tracker.mac_address = None
+        self.assertTrue(tracker.accepts_current_station())
