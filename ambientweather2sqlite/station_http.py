@@ -1,5 +1,6 @@
 """Serialize HTTP requests by normalized receiver hostname within one process."""
 
+from collections.abc import Callable
 from http.client import HTTPException
 from threading import Lock
 from weakref import WeakValueDictionary
@@ -26,6 +27,7 @@ def station_get(
     *,
     auto_retry: bool = False,
     timeout: float | None = None,
+    verify_identity: Callable[[str], None] | None = None,
 ) -> str:
     """Fetch one page, serializing requests and retries to the same host key."""
     try:
@@ -36,8 +38,12 @@ def station_get(
     with request_lock:
         try:
             if timeout is None:
-                return mureq.get(url, auto_retry=auto_retry)
-            return mureq.get(url, auto_retry=auto_retry, timeout=timeout)
+                body = mureq.get(url, auto_retry=auto_retry)
+            else:
+                body = mureq.get(url, auto_retry=auto_retry, timeout=timeout)
         except (ValueError,) as error:  # noqa: B013
             msg = f"Receiver request failed: {error}"
             raise HTTPException(msg) from error
+        if verify_identity is not None:
+            verify_identity(url)
+        return body

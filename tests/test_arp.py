@@ -1,13 +1,16 @@
 import subprocess
 import tempfile
+import time
 from pathlib import Path
+from typing import Never
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from ambientweather2sqlite.arp import (
+    _available_commands,
     _mac_from_output,
-    _normalize_mac,
     get_mac_address,
+    normalize_mac,
 )
 
 _MACOS_ARP_OUTPUT = "? (192.168.0.99) at 0:11:22:3:44:55 on en0 ifscope [ethernet]\n"
@@ -25,17 +28,17 @@ _PROC_NET_ARP_CONTENT = (
 
 class TestNormalizeMac(TestCase):
     def test_lowercases_and_zero_pads_octets(self):
-        self.assertEqual(_normalize_mac("0:11:22:3:44:55"), "00:11:22:03:44:55")
-        self.assertEqual(_normalize_mac("AA:BB:CC:DD:EE:FF"), "aa:bb:cc:dd:ee:ff")
+        self.assertEqual(normalize_mac("0:11:22:3:44:55"), "00:11:22:03:44:55")
+        self.assertEqual(normalize_mac("AA:BB:CC:DD:EE:FF"), "aa:bb:cc:dd:ee:ff")
 
     def test_accepts_dash_separated_octets(self):
-        self.assertEqual(_normalize_mac("aa-bb-cc-dd-ee-ff"), "aa:bb:cc:dd:ee:ff")
+        self.assertEqual(normalize_mac("aa-bb-cc-dd-ee-ff"), "aa:bb:cc:dd:ee:ff")
 
     def test_rejects_wrong_octet_count(self):
-        self.assertIsNone(_normalize_mac("aa:bb:cc:dd:ee"))
+        self.assertIsNone(normalize_mac("aa:bb:cc:dd:ee"))
 
     def test_rejects_non_hex_octets(self):
-        self.assertIsNone(_normalize_mac("zz:bb:cc:dd:ee:ff"))
+        self.assertIsNone(normalize_mac("zz:bb:cc:dd:ee:ff"))
 
 
 class TestMacFromOutput(TestCase):
@@ -57,6 +60,24 @@ class TestMacFromOutput(TestCase):
 
 
 class TestGetMacAddress(TestCase):
+    def setUp(self):
+        self.enterContext(
+            patch(
+                "ambientweather2sqlite.arp._available_commands",
+                return_value=(
+                    ("ip", "neigh", "show", "{ip}"),
+                    ("arp", "-n", "{ip}"),
+                    ("arp", "-a", "{ip}"),
+                ),
+            )
+        )
+        self.enterContext(
+            patch(
+                "ambientweather2sqlite.arp._PROC_NET_ARP",
+                Path("/nonexistent/weather-tests/arp"),
+            )
+        )
+
     def test_reads_linux_ip_neigh_output(self):
         with patch(
             "ambientweather2sqlite.arp.subprocess.run",
@@ -153,3 +174,79 @@ class TestGetMacAddress(TestCase):
 
         self.assertEqual(mac, "00:11:22:03:44:55")
         self.assertEqual(mock_run.call_count, 2)
+
+    def test_proc_hit_does_not_spawn_a_process(self):
+        with (
+            patch(
+                "ambientweather2sqlite.arp._mac_from_proc_net_arp",
+                return_value="aa:bb:cc:dd:ee:ff",
+            ),
+            patch("ambientweather2sqlite.arp.subprocess.run") as run,
+        ):
+            self.assertEqual(get_mac_address("192.168.0.99"), "aa:bb:cc:dd:ee:ff")
+        run.assert_not_called()
+
+    def test_command_timeouts_share_one_second_and_do_not_cache_macs(self):
+        clock = [10.0]
+        timeouts = []
+
+        def run(command, *, timeout, **_kwargs: object) -> Never:
+            timeouts.append(timeout)
+            clock[0] += min(0.6, timeout)
+            raise subprocess.TimeoutExpired(command, timeout)
+
+        started = time.monotonic()
+        with (
+            patch(
+                "ambientweather2sqlite.arp.time.monotonic", side_effect=lambda: clock[0]
+            ),
+            patch("ambientweather2sqlite.arp.subprocess.run", side_effect=run),
+        ):
+            self.assertIsNone(get_mac_address("192.168.0.99"))
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(len(timeouts), 2)
+        self.assertAlmostEqual(timeouts[0], 1)
+        self.assertAlmostEqual(timeouts[1], 0.4)
+        self.assertAlmostEqual(clock[0], 11)
+        with patch(
+            "ambientweather2sqlite.arp.subprocess.run",
+            side_effect=[
+                Mock(stdout=_LINUX_IP_NEIGH_OUTPUT),
+                Mock(stdout=_MACOS_ARP_OUTPUT),
+            ],
+        ):
+            self.assertEqual(get_mac_address("192.168.0.99"), "aa:bb:cc:dd:ee:ff")
+            self.assertEqual(get_mac_address("192.168.0.99"), "00:11:22:03:44:55")
+
+
+class TestAvailableCommands(TestCase):
+    def setUp(self):
+        _available_commands.cache_clear()
+        self.addCleanup(_available_commands.cache_clear)
+
+    def test_platform_selection_and_executable_availability_are_cached(self):
+        for platform, expected in (
+            (
+                "linux",
+                (("/bin/ip", "neigh", "show", "{ip}"), ("/bin/arp", "-n", "{ip}")),
+            ),
+            ("darwin", (("/bin/arp", "-n", "{ip}"),)),
+            ("freebsd14", (("/bin/arp", "-n", "{ip}"),)),
+            ("win32", (("/bin/arp", "-a", "{ip}"),)),
+        ):
+            _available_commands.cache_clear()
+            with (
+                self.subTest(platform=platform),
+                patch("ambientweather2sqlite.arp.sys.platform", platform),
+                patch(
+                    "ambientweather2sqlite.arp.shutil.which",
+                    side_effect=lambda name: f"/bin/{name}",
+                ) as which,
+            ):
+                self.assertEqual(_available_commands(), expected)
+                self.assertEqual(_available_commands(), expected)
+                self.assertEqual(which.call_count, len(expected))
+
+    def test_missing_binaries_are_not_attempted(self):
+        with patch("ambientweather2sqlite.arp.shutil.which", return_value=None):
+            self.assertEqual(_available_commands(), ())

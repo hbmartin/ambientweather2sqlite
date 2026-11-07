@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import sqlite3
 import sys
 import tomllib
@@ -30,6 +31,8 @@ from ambientweather2sqlite.metadata import (
     write_metadata_from_database,
 )
 from ambientweather2sqlite.models import AppConfig
+from ambientweather2sqlite.receiver_state import reset_receiver_identity
+from ambientweather2sqlite.rediscovery import create_rediscovery
 
 from .parser import parse_args
 
@@ -106,7 +109,29 @@ def _cmd_config(args: argparse.Namespace) -> None:
 def _cmd_once(args: argparse.Namespace) -> None:
     config_path = _resolve_config(args)
     config = _load_config_or_exit(config_path)
-    fetch_once(config.live_data_url)
+    tracker = create_rediscovery(
+        config.rediscovery,
+        config.live_data_url,
+        config.database_path,
+        logging.getLogger("ambientweather2sqlite"),
+    )
+    fetch_once(
+        config.live_data_url,
+        verify_identity=tracker.verify_identity if tracker is not None else None,
+    )
+
+
+def _cmd_receiver(args: argparse.Namespace) -> None:
+    config_path = args.config_path or get_config_path()
+    if config_path is None:
+        print("Receiver reset failed: no existing configuration found", file=sys.stderr)
+        sys.exit(1)
+    config = _load_config_or_exit(config_path)
+    with _report_command_errors("Receiver reset"):
+        reset_receiver_identity(config.database_path, config.live_data_url)
+    print(
+        "Receiver identity reset. Restart collection to learn the configured receiver."
+    )
 
 
 def _require_database(database_path: str) -> None:
@@ -194,9 +219,18 @@ def _cmd_metadata(args: argparse.Namespace) -> None:
                 print("Metadata refresh failed", file=sys.stderr)
                 sys.exit(1)
         else:
+            tracker = create_rediscovery(
+                config.rediscovery,
+                config.live_data_url,
+                config.database_path,
+                logging.getLogger("ambientweather2sqlite"),
+            )
             labels, _ = create_metadata(
                 config.database_path,
                 config.live_data_url,
+                verify_identity=tracker.verify_identity
+                if tracker is not None
+                else None,
             )
             if not labels:
                 print("Metadata refresh failed", file=sys.stderr)
@@ -230,6 +264,7 @@ def main(argv: list[str] | None = None) -> None:
         "backup": _cmd_backup,
         "migrate": _cmd_migrate,
         "metadata": _cmd_metadata,
+        "receiver": _cmd_receiver,
         "install-launchd": _cmd_install_launchd,
         "install-systemd": _cmd_install_systemd,
     }

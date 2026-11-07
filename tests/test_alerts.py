@@ -34,6 +34,25 @@ def _start_collection_event(
 
 class TestAlertNotifier(TestCase):
     @patch("ambientweather2sqlite.alerts.mureq.post")
+    def test_mismatch_reason_is_only_added_to_the_triggering_offline_event(
+        self, post: Mock
+    ) -> None:
+        notifier, _ = _make_notifier()
+        notifier.record_failure()
+        notifier.record_failure()
+        notifier.record_failure(reason="identity_mismatch")
+        offline = post.call_args.kwargs["json"]
+        self.assertEqual(offline["event"], "station_offline")
+        self.assertEqual(offline["reason"], "identity_mismatch")
+        notifier.record_success()
+        online = post.call_args.kwargs["json"]
+        self.assertEqual(online["event"], "station_online")
+        self.assertNotIn("reason", online)
+        for _ in range(_CONFIG.failure_threshold):
+            notifier.record_failure()
+        self.assertNotIn("reason", post.call_args.kwargs["json"])
+
+    @patch("ambientweather2sqlite.alerts.mureq.post")
     def test_collection_events_include_freshness_without_resetting_failures(
         self,
         mock_post: Mock,

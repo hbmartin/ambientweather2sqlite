@@ -5,7 +5,7 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from ambientweather2sqlite.cli.commands import main
 from ambientweather2sqlite.cli.parser import parse_args
@@ -253,7 +253,9 @@ class TestMainOnce(TestCase):
 
         main(["once"])
 
-        mock_fetch_once.assert_called_once_with("http://127.0.0.1/livedata.htm")
+        mock_fetch_once.assert_called_once_with(
+            "http://127.0.0.1/livedata.htm", verify_identity=ANY
+        )
 
 
 class TestMainConfig(TestCase):
@@ -598,6 +600,7 @@ class TestMainMetadata(TestCase):
         mock_create_metadata.assert_called_once_with(
             "weather.db",
             "http://127.0.0.1/livedata.htm",
+            verify_identity=ANY,
         )
         mock_metadata_path.assert_called_once_with("weather.db")
         mock_print.assert_called_once_with(f"Metadata written to {sidecar_path}")
@@ -733,6 +736,7 @@ class TestMainMetadata(TestCase):
         mock_create_metadata.assert_called_once_with(
             "weather.db",
             "http://127.0.0.1/livedata.htm",
+            verify_identity=ANY,
         )
         mock_print.assert_called_once_with("Metadata refresh failed", file=sys.stderr)
 

@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any, ClassVar, cast, override
 from urllib.parse import parse_qs, unquote, urlparse
 
-from ambientweather2sqlite.exceptions import Aw2SqliteError, MissingTimezoneError
+from ambientweather2sqlite.exceptions import (
+    Aw2SqliteError,
+    MissingTimezoneError,
+    ReceiverIdentityMismatch,
+)
 
 from .awparser import extract_labels, extract_values
 from .database import (
@@ -54,6 +58,8 @@ def create_request_handler(  # noqa: C901
     live_data_url: str,
     db_path: str,
     auth_token: str | None = None,
+    *,
+    verify_identity: Callable[[str], None] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     log_path = Path(db_path).parent / f"{Path(db_path).stem}_server.log"
 
@@ -137,7 +143,14 @@ def create_request_handler(  # noqa: C901
 
         def _send_live_data(self) -> None:
             try:
-                body = station_get(self.LIVE_DATA_URL, auto_retry=True)
+                body = station_get(
+                    self.LIVE_DATA_URL,
+                    auto_retry=True,
+                    verify_identity=verify_identity,
+                )
+            except (ReceiverIdentityMismatch,) as error:  # noqa: B013
+                self._send_json(build_error_payload(str(error)), 503)
+                return
             except Exception as e:  # noqa: BLE001
                 self.log_message("%s\n%s", type(e).__name__, str(e))
                 self._send_json(build_error_payload(str(e)), 500)
@@ -351,16 +364,20 @@ def create_request_handler(  # noqa: C901
 
 
 class Server:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         live_data_url: str,
         db_path: str,
         port: int,
         host: str,
         auth_token: str | None = None,
+        *,
+        verify_identity: Callable[[str], None] | None = None,
     ):
         with ExitStack() as cleanup:
-            handler_class = create_request_handler(live_data_url, db_path, auth_token)
+            handler_class = create_request_handler(
+                live_data_url, db_path, auth_token, verify_identity=verify_identity
+            )
             self._handler_class = handler_class
             self._teardown_logger = cast("Any", handler_class).teardown_logger
             cleanup.callback(self._teardown_logger)

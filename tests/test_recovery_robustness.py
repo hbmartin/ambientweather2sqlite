@@ -287,6 +287,11 @@ class TestMonitorRobustness(TestCase):
 
 class TestReachabilityTransitions(TestCase):
     def setUp(self) -> None:
+        self.enterContext(
+            patch(
+                "ambientweather2sqlite.rediscovery.get_mac_address", return_value=None
+            )
+        )
         directory = self.enterContext(tempfile.TemporaryDirectory())
         self.database = str(Path(directory) / "weather.db")
         create_database_if_not_exists(self.database)
@@ -484,7 +489,7 @@ class TestReachabilityTransitions(TestCase):
 class TestDaemonLifecycle(TestCase):
     def test_interrupts_and_errors_cleanup_and_restore_signals(self) -> None:
         previous = signal.getsignal(signal.SIGTERM)
-        for phase in ("metadata", "server", "rediscovery", "collection"):
+        for phase in ("rediscovery", "metadata", "server", "collection"):
             for use_sigterm in (False, True):
                 with self.subTest(phase=phase, sigterm=use_sigterm):
                     server = Mock()
@@ -504,7 +509,7 @@ class TestDaemonLifecycle(TestCase):
                     targets = {
                         "metadata": "ambientweather2sqlite.daemon.create_metadata",
                         "server": "ambientweather2sqlite.daemon.Server",
-                        "rediscovery": "ambientweather2sqlite.daemon.StationRediscovery",
+                        "rediscovery": "ambientweather2sqlite.daemon.create_rediscovery",
                         "collection": "ambientweather2sqlite.daemon._collect_forever",
                     }
                     with (
@@ -523,7 +528,7 @@ class TestDaemonLifecycle(TestCase):
                             "ambientweather2sqlite.recovery.CollectionMonitor",
                             return_value=monitor,
                         ),
-                        patch("ambientweather2sqlite.daemon.StationRediscovery"),
+                        patch("ambientweather2sqlite.daemon.create_rediscovery"),
                         patch("ambientweather2sqlite.daemon._collect_forever"),
                         patch("builtins.print"),
                     ):
@@ -542,7 +547,9 @@ class TestDaemonLifecycle(TestCase):
                     self.assertEqual(caught.exception.code, 0)
                     monitor.start.assert_called_once()
                     monitor.stop.assert_called_once()
-                    self.assertEqual(server.shutdown.call_count, phase != "metadata")
+                    self.assertEqual(
+                        server.shutdown.call_count, phase in ("server", "collection")
+                    )
                     self.assertIs(signal.getsignal(signal.SIGTERM), previous)
 
     def test_unexpected_collection_error_propagates_after_cleanup(self) -> None:
@@ -560,7 +567,7 @@ class TestDaemonLifecycle(TestCase):
             patch(
                 "ambientweather2sqlite.recovery.CollectionMonitor", return_value=monitor
             ),
-            patch("ambientweather2sqlite.daemon.StationRediscovery"),
+            patch("ambientweather2sqlite.daemon.create_rediscovery"),
             patch(
                 "ambientweather2sqlite.daemon._collect_forever",
                 side_effect=RuntimeError("collection failed"),

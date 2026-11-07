@@ -2,32 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from contextlib import closing
 from pathlib import Path
 
+from ambientweather2sqlite.file_io import sync_file_and_parent
+
 from .connection import _connect_database
-
-
-def _sync_file_and_parent(path: Path) -> None:
-    """Flush a file and its directory entry to durable storage."""
-    with path.open("rb") as backup_file:
-        os.fsync(backup_file.fileno())
-
-    if os.name == "nt":
-        # Windows cannot open a directory with os.open; fsyncing the file still
-        # flushes its data and metadata through FlushFileBuffers.
-        return
-    try:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        directory_fd = os.open(path.parent, flags)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    except (OSError,):
-        # Some platforms and filesystems do not support syncing directories.
-        pass
 
 
 def backup_database(db_path: str, dest_path: str) -> int:
@@ -57,7 +37,7 @@ def backup_database(db_path: str, dest_path: str) -> int:
     try:
         with closing(_connect_database(db_path, read_only=True)) as conn:
             conn.execute("VACUUM INTO ?", (str(destination),))
-        _sync_file_and_parent(destination)
+        sync_file_and_parent(destination)
     except (BaseException,):
         # Remove the reserved/partial file so a retry is not blocked.
         destination.unlink(missing_ok=True)

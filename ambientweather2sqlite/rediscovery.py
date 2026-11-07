@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import ipaddress
-import json
-import os
-import tempfile
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from .arp import _mac_from_output, get_mac_address
+from .arp import get_mac_address
+from .exceptions import ReceiverIdentityMismatch
+from .receiver_state import (
+    legacy_receiver_state_path,
+    load_receiver_identity,
+    receiver_state_path,
+    save_receiver_identity,
+)
 from .scanner import detect_local_subnet, probe_weather_station, scan_port80
 
 if TYPE_CHECKING:
     import logging
+    from pathlib import Path
 
     from .models import RediscoveryConfig
 
@@ -103,74 +108,64 @@ class StationRediscovery:
     mac_address: str | None = None
     consecutive_failures: int = 0
     state_path: Path | None = None
+    legacy_state_path: Path | None = None
     _last_scan: float = field(default=float("-inf"), init=False)
     _configured_url: str = field(init=False)
+    _temporary_identity: bool = field(default=False, init=False)
+    _identity_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _last_mismatch: tuple[str, str, str] | None = field(default=None, init=False)
+    _last_mismatch_warning: float = field(default=float("-inf"), init=False)
 
     def __post_init__(self) -> None:
         """Load identity without changing the operator's configured URL."""
         self._configured_url = self.current_url
         if self.state_path is None or self.mac_address is not None:
             return
-        try:
-            state = json.loads(self.state_path.read_text(encoding="utf-8"))
-            if not isinstance(state, dict):
-                self.logger.warning("Cannot load receiver identity: expected an object")
-                return
-            if state.get("configured_url") != self._configured_url:
-                return
-            mac = state.get("mac_address")
-            if not isinstance(mac, str) or _mac_from_output(mac) != mac:
-                self.logger.warning(
-                    "Cannot load receiver identity: invalid MAC address"
-                )
-                return
-            self.mac_address = mac
-            self.logger.info("Restored receiver identity %s", mac)
-        except (FileNotFoundError,):  # noqa: B013
-            pass
-        except (OSError, ValueError) as error:
-            self.logger.warning("Cannot load receiver identity: %s", error)
+        self.mac_address = load_receiver_identity(
+            self.state_path,
+            self._configured_url,
+            self.logger,
+            legacy_path=self.legacy_state_path,
+        )
+        if self.mac_address is not None:
+            self.logger.info("Restored receiver identity %s", self.mac_address)
 
     def _save_identity(self) -> None:
-        if self.state_path is None or self.mac_address is None:
+        if (
+            self.state_path is None
+            or self.mac_address is None
+            or self._temporary_identity
+        ):
             return
-        temporary_path: Path | None = None
         try:
-            descriptor, name = tempfile.mkstemp(
-                prefix=f".{self.state_path.name}.", dir=self.state_path.parent
+            save_receiver_identity(
+                self.state_path, self._configured_url, self.mac_address
             )
-            temporary_path = Path(name)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump(
-                    {
-                        "configured_url": self._configured_url,
-                        "mac_address": self.mac_address,
-                    },
-                    stream,
-                )
-                stream.flush()
-                os.fsync(stream.fileno())
-            temporary_path.replace(self.state_path)
         except (OSError,) as error:  # noqa: B013
             self.logger.warning("Cannot save receiver identity: %s", error)
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
 
-    def accepts_current_station(self) -> bool:
-        """Reject a readable identity mismatch before storing any observations."""
-        if self.mac_address is None or (ip := _host_ip(self.current_url)) is None:
-            return True
+    def verify_identity(self, url: str) -> None:
+        """Check the actual fetched URL against a snapshot of session identity."""
+        with self._identity_lock:
+            expected = self.mac_address
+        if expected is None or (ip := _host_ip(url)) is None:
+            return
         mac = get_mac_address(ip)
-        if mac is None or mac == self.mac_address:
-            return True
-        self.logger.warning(
-            "Receiver identity mismatch at %s: expected %s, found %s; rediscovering",
-            self.current_url,
-            self.mac_address,
-            mac,
-        )
-        return False
+        with self._identity_lock:
+            if mac == expected:
+                self._last_mismatch = None
+            if mac is None or mac == expected:
+                return
+            mismatch = (url, expected, mac)
+            now = time.monotonic()
+            if (
+                mismatch != self._last_mismatch
+                or now - self._last_mismatch_warning >= _RESCAN_COOLDOWN_SECONDS
+            ):
+                self.logger.warning("%s", ReceiverIdentityMismatch(*mismatch))
+                self._last_mismatch_warning = now
+            self._last_mismatch = mismatch
+        raise ReceiverIdentityMismatch(*mismatch)
 
     def record_success(self) -> None:
         """Reset the failure count and capture the station's MAC once."""
@@ -178,7 +173,8 @@ class StationRediscovery:
         if self.mac_address is not None:
             return
         if (ip := _host_ip(self.current_url)) and (mac := get_mac_address(ip)):
-            self.mac_address = mac
+            with self._identity_lock:
+                self.mac_address = mac
             self._save_identity()
             self.logger.info("Captured station MAC %s for %s", mac, ip)
 
@@ -222,9 +218,29 @@ class StationRediscovery:
             new_url,
             matched_by,
         )
-        self.current_url = new_url
-        # A fallback match may not have MAC evidence; clearing lets the next
-        # successful fetch re-capture the identity at the new address.
-        self.mac_address = new_mac
+        with self._identity_lock:
+            if self.mac_address is None:
+                self._temporary_identity = True
+            self.current_url = new_url
+            # A fallback without evidence can learn a session-only MAC later.
+            self.mac_address = new_mac
         self._save_identity()
         return new_url
+
+
+def create_rediscovery(
+    config: RediscoveryConfig,
+    url: str,
+    database_path: str,
+    logger: logging.Logger,
+) -> StationRediscovery | None:
+    """Load a database's identity only when rediscovery is enabled."""
+    if not config.enabled:
+        return None
+    return StationRediscovery(
+        config,
+        url,
+        logger,
+        state_path=receiver_state_path(database_path),
+        legacy_state_path=legacy_receiver_state_path(database_path),
+    )

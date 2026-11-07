@@ -19,7 +19,7 @@ from ambientweather2sqlite.server import Server
 
 from .alerts import AlertNotifier
 from .database import insert_observation
-from .exceptions import InvalidTimestampError
+from .exceptions import InvalidTimestampError, ReceiverIdentityMismatch
 from .ha_discovery import build_discovery_messages
 from .metadata import create_metadata
 from .models import (
@@ -34,7 +34,7 @@ from .models import (
 )
 from .mqtt import MqttError, publish, publish_message
 from .recovery import monitor_collection
-from .rediscovery import StationRediscovery
+from .rediscovery import StationRediscovery, create_rediscovery
 from .station_http import station_get
 
 # Cap the rotating daemon log so it cannot grow without bound on a
@@ -158,10 +158,12 @@ def _sigterm_handler(logger: logging.Logger | None = None) -> Generator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
-def fetch_once(live_data_url: str) -> None:
+def fetch_once(
+    live_data_url: str, *, verify_identity: Callable[[str], None] | None = None
+) -> None:
     """Fetch a single observation and print it without writing to the DB."""
     try:
-        body = station_get(live_data_url)
+        body = station_get(live_data_url, verify_identity=verify_identity)
         live_data = extract_values(body)
     except (TimeoutError,):
         print("Error: Weather station timed out.", file=sys.stderr)
@@ -261,12 +263,14 @@ def _refresh_metadata(  # noqa: PLR0913
     mqtt_config: MqttConfig | None,
     *,
     observed_sensor_names: Iterable[str] = (),
+    verify_identity: Callable[[str], None] | None = None,
 ) -> bool:
     """Refresh persisted metadata and discovery state after schema changes."""
     try:
         refreshed_labels, refreshed_units = create_metadata(
             database_path,
             live_data_url,
+            verify_identity=verify_identity,
         )
     except (HTTPException, TimeoutError, sqlite3.Error, OSError) as e:
         logger.info("Metadata refresh failed: %s", e)
@@ -327,6 +331,7 @@ def _handle_failed_cycle(  # noqa: PLR0913
     period_seconds: int,
     *,
     interactive: bool = True,
+    failure_reason: str | None = None,
 ) -> tuple[str, int]:
     """Count a failed attempt and wait at least one full polling interval.
 
@@ -334,7 +339,10 @@ def _handle_failed_cycle(  # noqa: PLR0913
     status lines printed for the interactive redraw.
     """
     if notifier is not None:
-        notifier.record_failure()
+        if failure_reason is None:
+            notifier.record_failure()
+        else:
+            notifier.record_failure(reason=failure_reason)
     live_data_url, extra_lines = _relocate_if_needed(
         rediscovery,
         live_data_url,
@@ -359,6 +367,8 @@ def _store_observation(  # noqa: PLR0913
     mqtt_config: MqttConfig | None,
     *,
     collection_attempt: int = 0,
+    verify_identity: Callable[[str], None] | None = None,
+    metadata_pending: bool = False,
 ) -> bool:
     """Store one row and refresh metadata after a successful schema change."""
     added_sensor_names: list[str] = []
@@ -376,7 +386,7 @@ def _store_observation(  # noqa: PLR0913
     metadata_retry_due = (
         metadata_incomplete and collection_attempt % _METADATA_RETRY_INTERVAL == 0
     )
-    if schema_changed or metadata_retry_due:
+    if not metadata_pending and (schema_changed or metadata_retry_due):
         _refresh_metadata(
             database_path,
             live_data_url,
@@ -385,6 +395,7 @@ def _store_observation(  # noqa: PLR0913
             logger,
             mqtt_config,
             observed_sensor_names=observed_sensor_names,
+            verify_identity=verify_identity,
         )
     return True
 
@@ -420,11 +431,14 @@ def _fetch_receiver_page(
     logger: logging.Logger,
     *,
     interactive: bool,
+    verify_identity: Callable[[str], None] | None = None,
 ) -> tuple[str, LiveData, int]:
     """Fetch and parse a page, retaining the diagnostic for each failure kind."""
     try:
-        body = station_get(live_data_url)
+        body = station_get(live_data_url, verify_identity=verify_identity)
         live_data = extract_values(body)
+    except (ReceiverIdentityMismatch,):
+        raise
     except (TimeoutError,):
         logger.info("TimeoutError")
         lines = (
@@ -459,6 +473,23 @@ def _fetch_receiver_page(
     return body, live_data, 0
 
 
+def _collection_page(
+    url: str,
+    logger: logging.Logger,
+    *,
+    interactive: bool,
+    verify_identity: Callable[[str], None] | None,
+) -> tuple[str, LiveData, int, str | None]:
+    """Keep identity rejection distinct from ordinary request failures."""
+    try:
+        body, data, lines = _fetch_receiver_page(
+            url, logger, interactive=interactive, verify_identity=verify_identity
+        )
+    except (ReceiverIdentityMismatch,) as error:
+        return "", {}, _status(str(error), interactive=interactive), "identity_mismatch"
+    return body, data, lines, None
+
+
 def _collect_forever(  # noqa: PLR0913
     live_data_url: str,
     database_path: str,
@@ -479,29 +510,63 @@ def _collect_forever(  # noqa: PLR0913
     collection_attempt = 0
     previous_station_time: str | None = None
     previous_live_data: LiveData | None = None
+    verify_identity = rediscovery.verify_identity if rediscovery is not None else None
+    metadata_refresh_pending = False
+
+    def apply_relocation(new_url: str) -> None:
+        nonlocal previous_station_time, previous_live_data, metadata_refresh_pending
+        previous_station_time = None
+        previous_live_data = None
+        if on_url_change is not None:
+            on_url_change(new_url)
+        labels.clear()
+        column_to_unit.clear()
+        metadata_refresh_pending = not _refresh_metadata(
+            database_path,
+            new_url,
+            labels,
+            column_to_unit,
+            logger,
+            mqtt_config,
+            verify_identity=verify_identity,
+        )
+
     while True:
         collection_attempt += 1
         if interactive:
             clear_lines(remove_newlines)
-        body, live_data, remove_newlines = _fetch_receiver_page(
+        body, live_data, remove_newlines, failure_reason = _collection_page(
             live_data_url,
             logger,
             interactive=interactive,
+            verify_identity=verify_identity,
         )
-        if not live_data or (
-            rediscovery is not None and not rediscovery.accepts_current_station()
-        ):
+        if not live_data:
             live_data_url, extra_lines = _handle_failed_cycle(
                 notifier,
                 rediscovery,
-                on_url_change,
+                apply_relocation,
                 live_data_url,
                 period_seconds,
                 interactive=interactive,
+                failure_reason=failure_reason,
             )
             remove_newlines += extra_lines
             continue
         _record_fetch_success(notifier, rediscovery)
+        if (
+            metadata_refresh_pending
+            and collection_attempt % _METADATA_RETRY_INTERVAL == 0
+        ):
+            metadata_refresh_pending = not _refresh_metadata(
+                database_path,
+                live_data_url,
+                labels,
+                column_to_unit,
+                logger,
+                mqtt_config,
+                verify_identity=verify_identity,
+            )
         station_time = extract_station_time(body)
         if _is_stale_observation(
             previous_station_time,
@@ -527,6 +592,8 @@ def _collect_forever(  # noqa: PLR0913
                 logger,
                 mqtt_config,
                 collection_attempt=collection_attempt,
+                verify_identity=verify_identity,
+                metadata_pending=metadata_refresh_pending,
             )
             if stored:
                 if notifier is not None:
@@ -621,8 +688,14 @@ def _serve_station(  # noqa: PLR0913
     """Initialize metadata and the API, then collect until interrupted."""
     labels: dict[str, str] = {}
     column_to_unit: ColumnUnitMap = {}
+    rediscovery = create_rediscovery(
+        rediscovery_config or RediscoveryConfig(), live_data_url, database_path, logger
+    )
+    verify_identity = rediscovery.verify_identity if rediscovery is not None else None
     try:
-        labels, column_to_unit = create_metadata(database_path, live_data_url)
+        labels, column_to_unit = create_metadata(
+            database_path, live_data_url, verify_identity=verify_identity
+        )
     except (HTTPException, TimeoutError, sqlite3.Error, OSError) as e:
         logger.info("%s\n%s", type(e).__name__, e)
         print(f"Error fetching metadata: {e}")
@@ -634,20 +707,15 @@ def _serve_station(  # noqa: PLR0913
     try:
         if port is not None:
             print(f"Starting JSON server on http://{host}:{port}")
-            server = Server(live_data_url, database_path, port, host, auth_token)
-            server.start()
-
-        rediscovery_config = rediscovery_config or RediscoveryConfig()
-        rediscovery = (
-            StationRediscovery(
-                rediscovery_config,
+            server = Server(
                 live_data_url,
-                logger,
-                state_path=Path(database_path).with_suffix(".receiver.json"),
+                database_path,
+                port,
+                host,
+                auth_token,
+                verify_identity=verify_identity,
             )
-            if rediscovery_config.enabled
-            else None
-        )
+            server.start()
 
         def _apply_relocated_url(new_url: str) -> None:
             """Propagate a relocated station URL to the server and notifier."""

@@ -38,7 +38,7 @@ class AlertNotifier:
         default_factory=Lock, init=False, repr=False, compare=False
     )
 
-    def record_failure(self) -> None:
+    def record_failure(self, *, reason: str | None = None) -> None:
         """Count a failed fetch, firing station_offline at the threshold."""
         self.consecutive_failures += 1
         notify_offline = (
@@ -49,7 +49,10 @@ class AlertNotifier:
             self.alert_sent = True
         self._remember_failure_peak()
         if notify_offline:
-            self._post("station_offline", self.consecutive_failures)
+            if reason is None:
+                self._post("station_offline", self.consecutive_failures)
+            else:
+                self._post("station_offline", self.consecutive_failures, reason=reason)
 
     def _remember_failure_peak(self) -> None:
         if self.alert_sent:
@@ -71,13 +74,17 @@ class AlertNotifier:
         self.alert_sent = False
         self._pending_failure_peak = 0
 
-    def _post(self, event: str, consecutive_failures: int) -> None:
+    def _post(
+        self, event: str, consecutive_failures: int, *, reason: str | None = None
+    ) -> None:
         payload: dict[str, object] = {
             "event": event,
             "station_url": self.station_url,
             "consecutive_failures": consecutive_failures,
             "timestamp": datetime.now(UTC).isoformat(),
         }
+        if reason is not None:
+            payload["reason"] = reason
         self._send(payload)
 
     def collection_event(

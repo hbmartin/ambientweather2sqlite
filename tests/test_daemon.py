@@ -9,7 +9,7 @@ from http.client import HTTPException
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 from ambientweather2sqlite.daemon import (
     _collect_forever,
@@ -814,6 +814,7 @@ class TestStartDaemon(TestCase):
         mock_create_metadata.assert_called_once_with(
             database_path,
             "http://127.0.0.1/livedata.htm",
+            verify_identity=ANY,
         )
         mock_server.assert_called_once_with(
             "http://127.0.0.1/livedata.htm",
@@ -821,6 +822,7 @@ class TestStartDaemon(TestCase):
             8080,
             "localhost",
             None,
+            verify_identity=mock_create_metadata.call_args.kwargs["verify_identity"],
         )
         server.start.assert_called_once_with()
         server.shutdown.assert_called_once_with()
