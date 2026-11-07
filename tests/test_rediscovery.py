@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
+from ambientweather2sqlite.exceptions import ReceiverIdentityMismatch
 from ambientweather2sqlite.models import RediscoveryConfig
 from ambientweather2sqlite.rediscovery import (
     StationRediscovery,
@@ -389,7 +390,8 @@ class TestPersistentReceiverIdentity(TestCase):
             "ambientweather2sqlite.rediscovery.get_mac_address",
             return_value="11:22:33:44:55:66",
         ):
-            self.assertFalse(tracker.accepts_current_station())
+            with self.assertRaises(ReceiverIdentityMismatch):
+                tracker.verify_identity(_OLD_URL)
         self.assertEqual(tracker.mac_address, _MAC)
 
     def test_matching_or_unreadable_current_identity_is_accepted(self):
@@ -400,6 +402,6 @@ class TestPersistentReceiverIdentity(TestCase):
             with patch(
                 "ambientweather2sqlite.rediscovery.get_mac_address", return_value=mac
             ):
-                self.assertTrue(tracker.accepts_current_station())
+                tracker.verify_identity(_OLD_URL)
         tracker.mac_address = None
-        self.assertTrue(tracker.accepts_current_station())
+        tracker.verify_identity(_OLD_URL)

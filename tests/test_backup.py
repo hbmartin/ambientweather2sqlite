@@ -98,7 +98,7 @@ class TestBackupDatabase(unittest.TestCase):
             ).fetchall()
         self.assertEqual(mapping, [("soil-moisture.1", "soil_moisture_1")])
 
-    @patch("ambientweather2sqlite.database.backup.os.fsync")
+    @patch("ambientweather2sqlite.file_io.os.fsync")
     def test_backup_flushes_file_and_parent_directory(
         self,
         mock_fsync: Mock,
@@ -109,7 +109,7 @@ class TestBackupDatabase(unittest.TestCase):
         self.assertEqual(mock_fsync.call_count, expected_calls)
 
     @unittest.skipIf(os.name == "nt", "Windows does not sync directories")
-    @patch("ambientweather2sqlite.database.backup.os.fsync")
+    @patch("ambientweather2sqlite.file_io.os.fsync")
     def test_backup_ignores_unsupported_directory_sync(
         self,
         mock_fsync: Mock,

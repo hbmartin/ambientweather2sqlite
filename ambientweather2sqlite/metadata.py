@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
-import stat
-import tempfile
 from http.client import HTTPException
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,7 +14,11 @@ from ambientweather2sqlite.station_http import station_get
 from ambientweather2sqlite.units_mapping import units_for_columns
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ambientweather2sqlite.models import ColumnUnitMap, LabelMap
+
+from .file_io import atomic_write_json
 
 
 def metadata_path(database_path: str) -> Path:
@@ -72,24 +72,7 @@ def _write_metadata_file(
         labels,
         column_to_unit,
     )
-    file_descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(file_descriptor, "w", encoding="utf-8") as temporary_file:
-            json.dump(metadata, temporary_file, indent=4)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        try:
-            mode = stat.S_IMODE(path.stat().st_mode)
-        except (FileNotFoundError,):
-            mode = 0o644
-        temporary_path.chmod(mode)
-        temporary_path.replace(path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    atomic_write_json(path, metadata, indent=4)
     return path
 
 
@@ -122,11 +105,19 @@ def write_metadata_from_database(
 def create_metadata(
     database_path: str,
     live_data_url: str,
+    *,
+    verify_identity: Callable[[str], None] | None = None,
 ) -> tuple[LabelMap, ColumnUnitMap]:
     try:
-        labels = extract_labels(station_get(live_data_url, auto_retry=True))
+        labels = extract_labels(
+            station_get(live_data_url, auto_retry=True, verify_identity=verify_identity)
+        )
         units = extract_units(
-            station_get(urljoin(live_data_url, "station.htm"), auto_retry=True),
+            station_get(
+                urljoin(live_data_url, "station.htm"),
+                auto_retry=True,
+                verify_identity=verify_identity,
+            ),
         )
         labels_with_units, column_to_unit = units_for_columns(labels, units)
     except (HTTPException, TimeoutError) as e:

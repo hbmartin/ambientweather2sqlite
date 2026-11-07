@@ -449,12 +449,80 @@ The daemon continuously fetches live data from your weather station's HTTP endpo
 - Stale console pages are skipped: the station only refreshes its readings every few minutes, so polling more often re-serves an identical page. The daemon detects this using the station's own reported observation time (the `Time`-named field on `livedata.htm`, e.g. `CurrTime`): it skips the write when that time has not advanced *and* the sensor values are identical, so a genuine sub-minute update (an unchanged time but changed readings) is still stored. Consoles that expose no such field fall back to skipping when every sensor value matches the last stored reading. This prevents a single unchanged reading from being fabricated into many distinct per-minute observations. Because the reported time carries no timezone or seconds it is used only as a change signal - the stored `ts` remains the collector's wall clock. The first poll after a (re)start has no prior reading, so it always inserts
 - Duplicate observations (same timestamp) are silently ignored via `INSERT OR IGNORE`
 - Samples are scheduled against a monotonic clock so intervals do not drift with fetch latency
-- If the station's DHCP lease moves it to a new IP, the daemon re-locates it automatically (on by default; disable with `enabled = false` in the `[rediscovery]` config table). After `failure_threshold` consecutive failed fetches (default 2) it rescans the local subnet and verifies the station's identity via the MAC address it recorded from the OS ARP cache after a previous successful fetch, falling back to an "exactly one station found" rule only until a receiver identity has been established. The learned MAC is saved atomically beside the database in `<database-stem>.receiver.json`, survives collector restarts, and is scoped to the configured URL. Once known, rediscovery requires a positive MAC match; unavailable identity information never authorizes switching to another station. A readable identity mismatch at the current address is rejected before observations are stored and triggers rediscovery. A relocation is logged as a warning and switches the polled URL in memory only - the config file is never modified. After a restart the configured URL is retried, and failures trigger relocation using the saved identity. Rescans run at most once every 5 minutes
+- If DHCP moves the station, automatic rediscovery rescans after consecutive failures and verifies the receiver by its learned MAC. See [receiver identity and DHCP rediscovery](#receiver-identity-and-dhcp-rediscovery) for temporary fallback, identity storage, and replacement/reset instructions
 - Failed fetches, including warmup timeouts, wait at least one full polling interval before retrying. Receiver HTTP requests from collection, metadata, discovery, and the live API proxy are serialized by normalized hostname or IP address within the process, including retries. Lock selection performs no DNS lookup. Different host keys, including hostname/IP aliases of the same receiver, can proceed independently; use a consistent address when serialization is required
-- Every valid parsed page resets consecutive fetch-failure and rediscovery counters, even when readings are unchanged or an insert fails. Unchanged pages still produce no new observation. A failed database insert is logged and does not publish an observation, print a successful recording, or establish stored-data recovery
-- When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed fetches (default 3) and a `station_online` webhook fires after the first fresh observation is successfully stored afterward. The online payload's `consecutive_failures` reports the largest uninterrupted failure streak while that offline notification was pending, even when valid pages reset the current counter before storage succeeds. Expected webhook validation and delivery errors are logged without interrupting collection. Each notifier caches validation of its current URL; a malformed URL supplied directly through `AlertConfig` warns once and skips delivery until the URL changes. Replacement URLs are validated again, and transport failures for valid URLs are logged on each failed attempt. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
+- Every valid parsed page accepted by the receiver identity check resets consecutive fetch-failure and rediscovery counters, even when readings are unchanged or an insert fails. Unchanged pages still produce no new observation. A failed database insert is logged and does not publish an observation, print a successful recording, or establish stored-data recovery
+- When an `[alerts]` config table is present, a `station_offline` webhook fires after `failure_threshold` consecutive failed collection attempts (default 3), including readable receiver identity mismatches, and a `station_online` webhook fires after the first fresh observation is successfully stored afterward. The online payload's `consecutive_failures` reports the largest uninterrupted failure streak while that offline notification was pending, even when valid pages reset the current counter before storage succeeds. Expected webhook validation and delivery errors are logged without interrupting collection. Each notifier caches validation of its current URL; a malformed URL supplied directly through `AlertConfig` warns once and skips delivery until the URL changes. Replacement URLs are validated again, and transport failures for valid URLs are logged on each failed attempt. If an identity mismatch triggers the offline event, its payload additionally contains `"reason": "identity_mismatch"`; ordinary offline and online payloads are unchanged. The POST body is JSON: `{"event": "station_offline", "station_url": "...", "consecutive_failures": 3, "timestamp": "2026-07-11T12:00:00+00:00"}`
 - Sensor-name mappings, labels, and units are persisted in SQLite. The adjacent `<database_stem>_metadata.json` Datasette sidecar is refreshed when new sensor columns appear and can be regenerated offline after a restore (compatible with the [datasette-pint](https://github.com/simonw/datasette-pint) plugin)
 - Press `Ctrl+C` to stop; on the main thread, `SIGTERM` (used by launchd/systemd/Docker) triggers the same graceful shutdown during startup and collection unless an opaque native handler is already installed (see [monitor shutdown behavior](#embedded-collection-recovery-monitor))
+
+### Receiver identity and DHCP rediscovery
+
+Rediscovery is enabled by default; disable it with `enabled = false` in the
+`[rediscovery]` table. After `failure_threshold` consecutive failures (default 2),
+the collector scans the local IPv4 subnet. Scans run at most once every five
+minutes. Once a MAC is known, relocation requires a positive MAC match; missing
+neighbor-cache information never authorizes switching to another receiver.
+
+A successful collection at the configured URL learns the receiver's MAC from
+the OS neighbor cache. The identity is saved atomically beside the database as
+`<database-filename>.receiver.json`: `station.db` uses `station.db.receiver.json`,
+while `station.sqlite` uses `station.sqlite.receiver.json`. Identity files have
+owner-only permissions where supported and are synced with their parent directory
+where the filesystem supports it. They contain `configured_url` and
+`mac_address`; identities do not expire automatically. Changing the configured
+URL starts a new identity scope. Relocated URLs remain in memory only, so a
+restart retries the configured URL and may need to rediscover the saved MAC.
+
+Until any identity is known, exactly one discovered station may be used as a
+**temporary fallback**. Its readings are written to the configured database and
+published normally, but its MAC is never saved as the configured receiver's
+identity, even after later MAC capture or relocation. The fallback remains in
+use for that process until a failure causes relocation or the process stops.
+A restart returns to the configured URL and can learn its receiver instead.
+
+Saved identity is loaded before startup metadata fetching. Collection, both
+metadata requests, online `aw2sqlite metadata`/`once`, and the live API check the
+actual fetched address before using a response. A readable different MAC causes
+the response to be rejected. The live `/` endpoint returns `503` with a JSON
+`error` instead of that receiver's readings or labels. Database-backed endpoints,
+including `/health`, continue independently. Relocation refreshes labels, units,
+and MQTT discovery even when sensor fields have not changed; failed metadata
+refreshes retry every ten collection cycles.
+
+Missing MAC information at the current address still permits valid pages to be
+used. This preserves collection when neighbor-cache access is unavailable, but
+cannot positively identify the receiver. Bridge-networked containers and routed
+networks may not expose the receiver's MAC; use a deployment with LAN neighbor
+visibility for verified relocation, or explicitly update the configured URL.
+Linux reads `/proc/net/arp` first. Platform-appropriate commands share a one-second
+lookup timeout budget, and successful MAC results are not cached across polls.
+Identity checking and persistence are disabled when rediscovery is disabled.
+
+A mismatch counts toward offline/rediscovery thresholds and does not reset
+failure counters. Each rejected cycle displays its reason; warnings are logged
+on the first mismatch, when its details change, and at most every five minutes
+while unchanged. A verified match clears mismatch diagnostics.
+
+After replacing a receiver or deliberately changing its MAC, stop the collector,
+confirm the configured URL selects the intended receiver, then run:
+
+```sh
+aw2sqlite receiver reset --config /path/to/config.toml
+```
+
+Restart the collector to learn the configured receiver on its next successful
+collection. Reset uses an existing configuration without launching setup and is
+safe to repeat when no identity exists. It removes identity state, not database
+observations or configuration. Stop collection first because a running process
+retains its identity in memory.
+
+On upgrade, a matching legacy `<database-stem>.receiver.json` is migrated to the
+new filename after the new file is durably written. An existing new-format file
+takes precedence. Legacy identities are preserved because their learning origin
+cannot be reconstructed; if an older version learned the wrong receiver through
+fallback, use the reset procedure. Reset also removes matching legacy state so
+it cannot reappear on restart.
 
 ### Database Schema
 

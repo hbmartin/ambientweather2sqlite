@@ -1,3 +1,20 @@
+from http.client import HTTPException
+
+
+class ReceiverIdentityMismatch(HTTPException):
+    """A response came from a different readable receiver identity."""
+
+    def __init__(self, url: str, expected_mac: str, observed_mac: str) -> None:
+        self.url = url
+        self.expected_mac = expected_mac
+        self.observed_mac = observed_mac
+        super().__init__(
+            f"Receiver identity mismatch at {url}: expected {expected_mac}, "
+            f"found {observed_mac}; rediscovering. After replacing a receiver, "
+            "stop collection and run 'aw2sqlite receiver reset'."
+        )
+
+
 class Aw2SqliteError(Exception):
     pass
 

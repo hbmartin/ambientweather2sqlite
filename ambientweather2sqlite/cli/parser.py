@@ -13,6 +13,7 @@ _SUBCOMMANDS = {
     "backup",
     "migrate",
     "metadata",
+    "receiver",
     "install-launchd",
     "install-systemd",
 }
@@ -173,6 +174,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Regenerate from metadata embedded in the database without network access."
         ),
     )
+
+    receiver_parser = subparsers.add_parser(
+        "receiver", help="Manage the learned receiver identity."
+    )
+    receiver_commands = receiver_parser.add_subparsers(
+        dest="receiver_command", required=True
+    )
+    reset_parser = receiver_commands.add_parser(
+        "reset", help="Forget receiver identity; stop the collector before resetting."
+    )
+    _add_config_arg(reset_parser)
 
     # install-launchd
     launchd_parser = subparsers.add_parser(

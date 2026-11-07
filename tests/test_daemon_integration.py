@@ -70,6 +70,11 @@ def _create_mock_server() -> tuple[HTTPServer, int]:
 
 class TestDaemonIntegration(TestCase):
     def setUp(self):
+        self.enterContext(
+            patch(
+                "ambientweather2sqlite.rediscovery.get_mac_address", return_value=None
+            )
+        )
         self.mock_server, self.mock_port = _create_mock_server()
         self.server_thread = threading.Thread(
             target=self.mock_server.serve_forever,
